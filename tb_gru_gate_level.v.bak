@@ -1,0 +1,433 @@
+`timescale 1ns / 1ps
+
+// ============================================================================
+// Gate-Level Testbench for GRU with Serial Interface
+// Uses your existing test data format from test_input.mem and test_output.mem
+// ============================================================================
+module tb_gru_gate_level;
+
+    // Parameters
+    parameter DATA_WIDTH = 32;
+    parameter INPUT_FEATURES = 3;
+    parameter GRU_UNITS = 3;
+    parameter SEQUENCE_LENGTH = 3;
+    parameter CLK_PERIOD = 20; // 20ns = 50MHz
+    parameter NUM_TEST_CASES = 8;
+
+    // DUT signals
+    reg clk;
+    reg rstn;
+    reg btn_start;
+    reg serial_data_in;
+    reg serial_clk_in;
+    reg serial_load_en;
+    
+    wire serial_data_out;
+    wire serial_clk_out;
+    wire serial_valid;
+    wire led_done;
+    wire led_ready;
+    wire led_loading;
+    wire [3:0] led_state;
+    
+    // Test data (same format as your RTL testbench)
+    reg [DATA_WIDTH-1:0] test_inputs [0:(NUM_TEST_CASES * SEQUENCE_LENGTH * INPUT_FEATURES) - 1];
+    reg [DATA_WIDTH-1:0] expected_outputs [0:NUM_TEST_CASES-1];
+    
+    // Results storage
+    real pred_floats [0:NUM_TEST_CASES-1];
+    real exp_floats [0:NUM_TEST_CASES-1];
+    real errors [0:NUM_TEST_CASES-1];
+    reg passed [0:NUM_TEST_CASES-1];
+    
+    integer i, test_case, j, base_idx;
+    real pred_float, exp_float, error;
+    reg [DATA_WIDTH-1:0] received_output;
+    
+    // Clock generation
+    initial begin
+        clk = 0;
+        forever #(CLK_PERIOD/2) clk = ~clk;
+    end
+    
+    // ========================================
+    // DUT Instantiation with SDF Annotation
+    // ========================================
+    GRU_Serial_Top dut (
+        .clk(clk),
+        .rstn(rstn),
+        .btn_start(btn_start),
+        .serial_data_in(serial_data_in),
+        .serial_clk_in(serial_clk_in),
+        .serial_load_en(serial_load_en),
+        .serial_data_out(serial_data_out),
+        .serial_clk_out(serial_clk_out),
+        .serial_valid(serial_valid),
+        .led_done(led_done),
+        .led_ready(led_ready),
+        .led_loading(led_loading),
+        .led_state(led_state)
+    );
+    
+    // SDF back-annotation for gate-level timing
+    // Comment out for RTL simulation
+    initial begin
+        `ifdef GATE_LEVEL_SIM
+            $sdf_annotate("../simulation/modelsim/GRU_Serial_Top_v.sdo", dut, , , "MAXIMUM");
+            $display("[TB] SDF timing annotation applied (MAXIMUM corner)");
+        `else
+            $display("[TB] Running RTL simulation (no SDF)");
+        `endif
+    end
+    
+    // ========================================
+    // Float Conversion Function (same as your RTL TB)
+    // ========================================
+    function real bits_to_float;
+        input [31:0] bits;
+        integer sign, exponent, mantissa, exp_signed;
+        real result;
+        begin
+            sign = bits[31];
+            exponent = bits[30:23];
+            mantissa = bits[22:0];
+
+            if (exponent == 8'd255) begin
+                if (mantissa == 0)
+                    result = (sign ? -1.0/0.0 : 1.0/0.0);
+                else
+                    result = 0.0/0.0;
+            end else if (exponent == 8'd0) begin
+                exp_signed = 1 - 127;
+                result = (mantissa / (2.0**23)) * (2.0 ** exp_signed);
+                if (sign) result = -result;
+            end else begin
+                exp_signed = exponent - 127;
+                result = (1.0 + (mantissa / (2.0**23))) * (2.0 ** exp_signed);
+                if (sign) result = -result;
+            end
+
+            bits_to_float = result;
+        end
+    endfunction
+    
+    // ========================================
+    // Task: Send Serial Word (32 bits, MSB first)
+    // ========================================
+    task send_serial_word;
+        input [DATA_WIDTH-1:0] data;
+        integer bit_idx;
+        begin
+            for (bit_idx = DATA_WIDTH-1; bit_idx >= 0; bit_idx = bit_idx - 1) begin
+                serial_data_in = data[bit_idx];
+                #(CLK_PERIOD);
+                serial_clk_in = 1;
+                #(CLK_PERIOD);
+                serial_clk_in = 0;
+            end
+        end
+    endtask
+    
+    // ========================================
+    // Task: Receive Serial Output
+    // ========================================
+    task receive_serial_output;
+        output [DATA_WIDTH-1:0] data;
+        integer bit_idx;
+        begin
+            data = 0;
+            
+            // Wait for serial_valid
+            wait(serial_valid);
+            $display("[%0t] [TB] Serial output transmission started", $time);
+            
+            // Receive 32 bits on rising edge of serial_clk_out
+            for (bit_idx = DATA_WIDTH-1; bit_idx >= 0; bit_idx = bit_idx - 1) begin
+                @(posedge serial_clk_out);
+                data[bit_idx] = serial_data_out;
+            end
+            
+            $display("[%0t] [TB] Received serial output: %h (%f)", 
+                     $time, data, bits_to_float(data));
+        end
+    endtask
+    
+    // ========================================
+    // Task: Load Test Sequence via Serial
+    // ========================================
+    task load_test_sequence_serial;
+        input integer test_num;
+        integer idx, seq_idx;
+        begin
+            base_idx = test_num * SEQUENCE_LENGTH * INPUT_FEATURES;
+            
+            $display("[%0t] [TB] Loading test sequence %0d via serial interface", $time, test_num);
+            
+            // Enable serial load
+            @(posedge clk);
+            serial_load_en = 1;
+            #(CLK_PERIOD*2);
+            
+            // Send 9 words (3 timesteps × 3 features)
+            for (idx = 0; idx < SEQUENCE_LENGTH * INPUT_FEATURES; idx = idx + 1) begin
+                seq_idx = base_idx + idx;
+                $display("  [TB] Sending word[%0d] = %h (%f)", 
+                         idx, test_inputs[seq_idx], bits_to_float(test_inputs[seq_idx]));
+                send_serial_word(test_inputs[seq_idx]);
+            end
+            
+            // Disable serial load
+            #(CLK_PERIOD*2);
+            serial_load_en = 0;
+            $display("[%0t] [TB] Serial load complete", $time);
+            
+            // Wait for READY state
+            wait(led_ready);
+            $display("[%0t] [TB] DUT ready for inference", $time);
+        end
+    endtask
+    
+    // ========================================
+    // Task: Run One Test Case
+    // ========================================
+    task run_test_case;
+        input integer test_num;
+        begin
+            $display("\n========================================");
+            $display("[TB] Test Case %0d", test_num);
+            $display("========================================");
+            
+            // Load test sequence
+            load_test_sequence_serial(test_num);
+            
+            // Start inference
+            @(posedge clk);
+            btn_start = 1;
+            $display("[%0t] [TB] Start button pressed", $time);
+            
+            @(posedge clk);
+            btn_start = 0;
+            
+            // Wait for completion and receive output
+            fork
+                begin
+                    wait(led_done);
+                    $display("[%0t] [TB] Inference complete (led_done asserted)", $time);
+                end
+                begin
+                    receive_serial_output(received_output);
+                end
+            join
+            
+            // Calculate error
+            pred_floats[test_num] = bits_to_float(received_output);
+            exp_floats[test_num] = bits_to_float(expected_outputs[test_num]);
+            errors[test_num] = $sqrt((pred_floats[test_num] - exp_floats[test_num])**2);
+            passed[test_num] = (errors[test_num] < 0.01);
+            
+            $display("[TB] Prediction = %h (%f)", received_output, pred_floats[test_num]);
+            $display("[TB] Expected   = %h (%f)", expected_outputs[test_num], exp_floats[test_num]);
+            $display("[TB] Error      = %f", errors[test_num]);
+            $display("[TB] Result: %s", passed[test_num] ? "PASS ✓" : "FAIL ✗");
+            
+            // Wait for button release
+            #(CLK_PERIOD*10);
+            
+            $display("[TB] Test Case %0d Complete\n", test_num);
+        end
+    endtask
+    
+    // ========================================
+    // Main Test Sequence
+    // ========================================
+    initial begin
+        // Initialize
+        rstn = 0;
+        btn_start = 0;
+        serial_data_in = 0;
+        serial_clk_in = 0;
+        serial_load_en = 0;
+        
+        // Load test data (same as your RTL testbench)
+        $readmemh("test_data/test_input.mem", test_inputs);
+        $readmemh("test_data/test_output.mem", expected_outputs);
+        
+        // VCD dump
+        $dumpfile("gru_gate_level.vcd");
+        $dumpvars(0, tb_gru_gate_level);
+        
+        $display("\n========================================");
+        $display("Gate-Level GRU Testbench");
+        $display("========================================\n");
+        
+        // Reset sequence
+        #(CLK_PERIOD*10);
+        @(posedge clk);
+        rstn = 1;
+        $display("[%0t] [TB] Reset released", $time);
+        
+        // Wait for weights to load from memory
+        wait(dut.gru_inst.weights_loaded);
+        $display("[%0t] [TB] Weights loaded from memory files", $time);
+        #(CLK_PERIOD*5);
+        
+        // Run all test cases
+        for (test_case = 0; test_case < NUM_TEST_CASES; test_case = test_case + 1) begin
+            run_test_case(test_case);
+        end
+        
+        // Print summary
+        $display("\n========================================");
+        $display("GATE-LEVEL SIMULATION RESULTS");
+        $display("========================================");
+        for (test_case = 0; test_case < NUM_TEST_CASES; test_case = test_case + 1) begin
+            $display("Test Case %0d:", test_case);
+            $display("  Prediction: %f", pred_floats[test_case]);
+            $display("  Expected:   %f", exp_floats[test_case]);
+            $display("  Error:      %f", errors[test_case]);
+            $display("  Status:     %s", passed[test_case] ? "✓ PASS" : "✗ FAIL");
+            $display("----------------------------------------");
+        end
+        
+        $display("\nSimulation completed at time %0t", $time);
+        #(CLK_PERIOD*10);
+        $finish;
+    end
+    
+    // Timeout watchdog
+    initial begin
+        #(CLK_PERIOD*5000000); // Longer timeout for gate-level
+        $error("[TB] TIMEOUT: Simulation exceeded maximum time!");
+        $finish;
+    end
+    
+    // Monitor state transitions
+    reg [3:0] prev_state;
+    always @(posedge clk) begin
+        if (led_state != prev_state) begin
+            $display("[%0t] [TB] State changed: %0d -> %0d", $time, prev_state, led_state);
+            prev_state <= led_state;
+        end
+    end
+
+endmodule
+
+
+// ============================================================================
+// Simplified Gate-Level Test (Direct GRU_Model Test)
+// No serial interface, for faster verification
+// ============================================================================
+module tb_gru_model_gate_direct;
+
+    parameter DATA_WIDTH = 32;
+    parameter INPUT_FEATURES = 3;
+    parameter GRU_UNITS = 3;
+    parameter SEQUENCE_LENGTH = 3;
+    parameter CLK_PERIOD = 20;
+    parameter NUM_TEST_CASES = 8;
+
+    reg clk, rstn, i_start;
+    wire o_done;
+    reg [(SEQUENCE_LENGTH*INPUT_FEATURES*DATA_WIDTH)-1:0] i_sequence_flat;
+    wire [DATA_WIDTH-1:0] o_prediction;
+    
+    reg [DATA_WIDTH-1:0] test_inputs [0:(NUM_TEST_CASES * SEQUENCE_LENGTH * INPUT_FEATURES) - 1];
+    reg [DATA_WIDTH-1:0] expected_outputs [0:NUM_TEST_CASES-1];
+    
+    integer test_case, i, base_idx;
+    
+    initial clk = 0;
+    always #(CLK_PERIOD/2) clk = ~clk;
+    
+    // Direct GRU_Model instantiation
+    GRU_Model #(
+        .DATA_WIDTH(DATA_WIDTH),
+        .INPUT_FEATURES(INPUT_FEATURES),
+        .GRU_UNITS(GRU_UNITS),
+        .SEQUENCE_LENGTH(SEQUENCE_LENGTH)
+    ) dut (
+        .clk(clk),
+        .rstn(rstn),
+        .i_start(i_start),
+        .o_done(o_done),
+        .i_sequence_flat(i_sequence_flat),
+        .o_prediction(o_prediction)
+    );
+    
+    // SDF annotation
+    initial begin
+        `ifdef GATE_LEVEL_SIM
+            $sdf_annotate("../simulation/modelsim/GRU_Model_v.sdo", dut);
+        `endif
+    end
+    
+    function real bits_to_float;
+        input [31:0] bits;
+        integer sign, exponent, mantissa, exp_signed;
+        real result;
+        begin
+            sign = bits[31];
+            exponent = bits[30:23];
+            mantissa = bits[22:0];
+            if (exponent == 8'd255) begin
+                result = (sign ? -1.0/0.0 : 1.0/0.0);
+            end else if (exponent == 8'd0) begin
+                exp_signed = 1 - 127;
+                result = (mantissa / (2.0**23)) * (2.0 ** exp_signed);
+                if (sign) result = -result;
+            end else begin
+                exp_signed = exponent - 127;
+                result = (1.0 + (mantissa / (2.0**23))) * (2.0 ** exp_signed);
+                if (sign) result = -result;
+            end
+            bits_to_float = result;
+        end
+    endfunction
+    
+    initial begin
+        rstn = 0;
+        i_start = 0;
+        i_sequence_flat = 0;
+        
+        $readmemh("test_data/test_input.mem", test_inputs);
+        $readmemh("test_data/test_output.mem", expected_outputs);
+        
+        $dumpfile("gru_model_gate_direct.vcd");
+        $dumpvars(0, tb_gru_model_gate_direct);
+        
+        #(CLK_PERIOD*10);
+        rstn = 1;
+        
+        wait(dut.weights_loaded);
+        $display("[TB] Weights loaded");
+        #(CLK_PERIOD*5);
+        
+        // Run test cases
+        for (test_case = 0; test_case < NUM_TEST_CASES; test_case = test_case + 1) begin
+            $display("\n[TB] Test Case %0d", test_case);
+            
+            base_idx = test_case * SEQUENCE_LENGTH * INPUT_FEATURES;
+            for (i = 0; i < SEQUENCE_LENGTH * INPUT_FEATURES; i = i + 1) begin
+                i_sequence_flat[i*DATA_WIDTH +: DATA_WIDTH] = test_inputs[base_idx + i];
+            end
+            
+            @(posedge clk);
+            i_start = 1;
+            @(posedge clk);
+            i_start = 0;
+            
+            wait(o_done);
+            $display("  Predicted: %f, Expected: %f", 
+                     bits_to_float(o_prediction), 
+                     bits_to_float(expected_outputs[test_case]));
+            
+            wait(!o_done);
+            #(CLK_PERIOD*5);
+        end
+        
+        $display("\nGate-level direct test complete");
+        #(CLK_PERIOD*10);
+        $finish;
+    end
+
+endmodule

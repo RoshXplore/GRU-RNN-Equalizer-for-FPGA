@@ -1,0 +1,114 @@
+`timescale 1ns / 1ps
+
+module tb_fpu_system;
+
+    parameter DATA_WIDTH = 32;
+    parameter MAX_VECTOR_SIZE = 7;
+
+    reg clk;
+    reg rstn;
+
+    // --- Adder Signals ---
+    reg start_adder;
+    reg [DATA_WIDTH-1:0] adder_in, adder_bias;
+    wire [DATA_WIDTH-1:0] adder_out;
+    wire adder_done;
+
+    // --- Multiplier Signals ---
+    reg start_multiplier;
+    reg [DATA_WIDTH-1:0] mult_in_a, mult_in_b;
+    wire [DATA_WIDTH-1:0] mult_out;
+    wire mult_done;
+
+    // --- Dot-Product Signals ---
+    reg start_dotproduct;
+    reg [DATA_WIDTH*MAX_VECTOR_SIZE-1:0] vector_a_flat, vector_b_flat;
+    reg [3:0] vector_length;
+    wire [DATA_WIDTH-1:0] dotproduct_out;
+    wire dotproduct_done;
+
+    // --- Instantiate Top Module ---
+    top_fpu_system dut (
+        .clk(clk),
+        .rstn(rstn),
+        .start_adder(start_adder),
+        .start_multiplier(start_multiplier),
+        .start_dotproduct(start_dotproduct),
+        .adder_in(adder_in),
+        .adder_bias(adder_bias),
+        .adder_out(adder_out),
+        .adder_done(adder_done),
+        .mult_in_a(mult_in_a),
+        .mult_in_b(mult_in_b),
+        .mult_out(mult_out),
+        .mult_done(mult_done),
+        .vector_a_flat(vector_a_flat),
+        .vector_b_flat(vector_b_flat),
+        .vector_length(vector_length),
+        .dotproduct_out(dotproduct_out),
+        .dotproduct_done(dotproduct_done)
+    );
+
+    // --- Clock Generation ---
+    initial clk = 0;
+    always #5 clk = ~clk; // 100MHz
+
+    // --- Task to wait for done ---
+    task wait_done(input wire done_signal);
+    begin
+        wait(done_signal);
+        @(posedge clk);
+    end
+    endtask
+
+    initial begin
+        // Reset
+        rstn = 0;
+        start_adder = 0; start_multiplier = 0; start_dotproduct = 0;
+        adder_in = 0; adder_bias = 0;
+        mult_in_a = 0; mult_in_b = 0;
+        vector_a_flat = 0; vector_b_flat = 0;
+        vector_length = 0;
+        @(posedge clk);
+        rstn = 1;
+        @(posedge clk);
+
+        // -------------------------
+        // TEST ADDER
+        // -------------------------
+        adder_in = 32'h40000000; // 2.0
+        adder_bias = 32'h40400000; // 3.0
+        start_adder = 1;
+        @(posedge clk);
+        start_adder = 0;
+        wait_done(adder_done);
+        $display("Adder result: %h (Expected 5.0)", adder_out);
+
+        // -------------------------
+        // TEST MULTIPLIER
+        // -------------------------
+        mult_in_a = 32'h40000000; // 2.0
+        mult_in_b = 32'h40400000; // 3.0
+        start_multiplier = 1;
+        @(posedge clk);
+        start_multiplier = 0;
+        wait_done(mult_done);
+        $display("Multiplier result: %h (Expected 6.0)", mult_out);
+
+        // -------------------------
+        // TEST DOT PRODUCT
+        // -------------------------
+        vector_a_flat = {32'h3f800000, 32'h40000000, 32'h40400000, 32'h0, 32'h0, 32'h0, 32'h0}; // [1,2,3]
+        vector_b_flat = {32'h40000000, 32'h40400000, 32'h40800000, 32'h0, 32'h0, 32'h0, 32'h0}; // [2,3,4]
+        vector_length = 3;
+        start_dotproduct = 1;
+        @(posedge clk);
+        start_dotproduct = 0;
+        wait_done(dotproduct_done);
+        $display("Dot product result: %h (Expected 20.0)", dotproduct_out);
+
+        $display("All tests completed successfully");
+        $stop;
+    end
+
+endmodule

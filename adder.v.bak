@@ -1,0 +1,82 @@
+`timescale 1ns / 1ps
+
+module adder
+(
+  input clk,
+  input rstn,
+  // Handshake Interface
+  input start,
+  output reg done,
+
+  // Data Inputs/Outputs
+  input [31:0] value_in,
+  input [31:0] bias,
+  output reg [31:0] value_out
+);
+
+  // --- FSM States & Latency ---
+  reg [1:0] state, next_state;
+  localparam S_IDLE = 2'd0, S_BUSY = 2'd1, S_DONE = 2'd2;
+  localparam LATENCY = 6; // The fixed latency of the internal FPU pipeline
+
+  // --- Internal Signals ---
+  reg [2:0] latency_counter;
+  wire [31:0] fpu_result;
+  wire fpu_ready;
+
+  // --- FPU Instantiation ---
+  fpu u_fpu (
+    .clk_i(clk),
+    .opa_i(value_in),
+    .opb_i(bias),
+    .fpu_op_i(3'b000),
+    .rmode_i(2'b00),
+    .start_i(state == S_BUSY), // FPU is active only when we are busy
+    .output_o(fpu_result),
+    .ready_o(fpu_ready),
+    // ... other ports ...
+    .snan_o()
+  );
+
+  // --- Sequential Logic ---
+  always @(posedge clk or negedge rstn) begin
+    if (!rstn) begin
+      state <= S_IDLE;
+      done <= 1'b0;
+      latency_counter <= 0;
+      value_out <= 0;
+    end else begin
+      state <= next_state;
+
+      // Logic for the stable done flag
+      done <= (next_state == S_DONE);
+
+      // Internal latency counter
+      if (state == S_IDLE && next_state == S_BUSY) begin
+        latency_counter <= 0; // Reset counter when starting
+      end else if (state == S_BUSY) begin
+        latency_counter <= latency_counter + 1;
+      end
+
+      // Latch the final result
+      if (state == S_BUSY && next_state == S_DONE) begin
+        value_out <= fpu_result;
+      end
+    end
+  end
+
+  // --- Combinational FSM Logic ---
+  always @(*) begin
+    next_state = state;
+    case(state)
+      S_IDLE:
+        if (start) next_state = S_BUSY;
+      S_BUSY:
+        if (latency_counter == LATENCY - 1) next_state = S_DONE;
+      S_DONE:
+        // Go back to IDLE only when the controller has lowered the start signal
+        if (!start) next_state = S_IDLE;
+    endcase
+  end
+
+endmodule

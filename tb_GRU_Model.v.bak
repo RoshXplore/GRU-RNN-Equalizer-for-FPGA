@@ -1,0 +1,179 @@
+module tb_GRU_Model;
+
+    // Parameters
+    parameter DATA_WIDTH = 32;
+    parameter INPUT_FEATURES = 3;
+    parameter GRU_UNITS = 3;
+    parameter SEQUENCE_LENGTH = 3;
+    parameter CLK_PERIOD = 10;
+    
+    // Clock and reset
+    reg clk;
+    reg rstn;
+    
+    // Control signals
+    reg start_model;
+    wire done_model;
+    
+    // Input sequence (ONLY external input now!)
+    reg [(SEQUENCE_LENGTH*INPUT_FEATURES*DATA_WIDTH)-1:0] input_sequence;
+    
+    // Output
+    wire [DATA_WIDTH-1:0] prediction;
+    
+    // Test data memory
+    reg [DATA_WIDTH-1:0] test_inputs [0:SEQUENCE_LENGTH*INPUT_FEATURES-1];
+    reg [DATA_WIDTH-1:0] expected_outputs [0:9];
+    
+    integer i, test_case;
+    real pred_float, exp_float, error;
+    
+    // Clock generation
+    initial begin
+        clk = 0;
+        forever #(CLK_PERIOD/2) clk = ~clk;
+    end
+    
+    // DUT instantiation - NO WEIGHT PORTS!
+    GRU_Model #(
+        .DATA_WIDTH(DATA_WIDTH),
+        .INPUT_FEATURES(INPUT_FEATURES),
+        .GRU_UNITS(GRU_UNITS),
+        .SEQUENCE_LENGTH(SEQUENCE_LENGTH)
+    ) dut (
+        .clk(clk),
+        .rstn(rstn),
+        .i_start(start_model),
+        .o_done(done_model),
+        .i_sequence_flat(input_sequence),
+        .o_prediction(prediction)
+    );
+    
+    // Function to convert IEEE 754 to real
+    function real bits_to_float;
+        input [31:0] bits;
+        reg sign;
+        reg [7:0] exponent;
+        reg [22:0] mantissa;
+        real result;
+        begin
+            sign = bits[31];
+            exponent = bits[30:23];
+            mantissa = bits[22:0];
+            
+            if (exponent == 8'd0) begin
+                result = 0.0;
+            end else begin
+                result = (1.0 + (mantissa / (2.0**23))) * (2.0 ** (exponent - 127));
+                if (sign) result = -result;
+            end
+            bits_to_float = result;
+        end
+    endfunction
+    
+    // Task to load test input sequence
+    task load_test_sequence;
+        input integer test_num;
+        integer idx;
+        begin
+            // Load input sequence from file
+            $readmemh($sformatf("test_data/input_%0d.hex", test_num), test_inputs);
+            
+            // Flatten into input_sequence
+            for (idx = 0; idx < SEQUENCE_LENGTH*INPUT_FEATURES; idx = idx + 1) begin
+                input_sequence[idx*DATA_WIDTH +: DATA_WIDTH] = test_inputs[idx];
+            end
+            
+            $display("[TB] Loaded test sequence %0d", test_num);
+        end
+    endtask
+    
+    // Task to run one test case
+    task run_test_case;
+        input integer test_num;
+        begin
+            $display("\n========================================");
+            $display("Running Test Case %0d", test_num);
+            $display("========================================");
+            
+            // Load test data
+            load_test_sequence(test_num);
+            
+            // Start the model
+            @(posedge clk);
+            start_model = 1;
+            @(posedge clk);
+            start_model = 0;
+            
+            // Wait for completion
+            wait(done_model);
+            @(posedge clk);
+            
+            // Convert output to float and display
+            pred_float = bits_to_float(prediction);
+            exp_float = bits_to_float(expected_outputs[test_num]);
+            error = (pred_float - exp_float) * (pred_float - exp_float);
+            error = $sqrt(error);
+            
+            $display("Prediction: %f (0x%h)", pred_float, prediction);
+            $display("Expected:   %f (0x%h)", exp_float, expected_outputs[test_num]);
+            $display("Error:      %f", error);
+            
+            if (error < 0.01) begin
+                $display("✓ PASS");
+            end else begin
+                $display("✗ FAIL");
+            end
+        end
+    endtask
+    
+    // Main test sequence
+    initial begin
+        // Initialize signals
+        rstn = 0;
+        start_model = 0;
+        input_sequence = 0;
+        
+        // Create output directory for waveforms
+        $dumpfile("gru_model.vcd");
+        $dumpvars(0, tb_GRU_Model);
+        
+        // Load expected outputs
+        $readmemh("test_data/expected_outputs.hex", expected_outputs);
+        
+        // Reset
+        #(CLK_PERIOD*5);
+        rstn = 1;
+        #(CLK_PERIOD*2);
+        
+        // Wait for weights to load internally
+        $display("\n========================================");
+        $display("Waiting for internal weight initialization");
+        $display("========================================");
+        wait(dut.weights_loaded);
+        $display("Weights loaded successfully\n");
+        
+        #(CLK_PERIOD*5);
+        
+        // Run test cases
+        for (test_case = 0; test_case < 5; test_case = test_case + 1) begin
+            run_test_case(test_case);
+            #(CLK_PERIOD*10);
+        end
+        
+        // End simulation
+        $display("\n========================================");
+        $display("All tests completed");
+        $display("========================================");
+        #(CLK_PERIOD*10);
+        $finish;
+    end
+    
+    // Timeout watchdog
+    initial begin
+        #(CLK_PERIOD*100000);
+        $display("ERROR: Simulation timeout!");
+        $finish;
+    end
+
+endmodule

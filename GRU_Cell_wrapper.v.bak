@@ -1,0 +1,170 @@
+`timescale 1ns/1ps
+
+module GRU_Cell_Wrapper #(
+    parameter DATA_WIDTH = 32,
+    parameter GRU_UNITS = 3,
+    parameter INPUT_FEATURES = 3
+)(
+    input  wire clk,
+    input  wire rstn,
+    
+    // Serial data loading interface
+    input  wire                   i_load_enable,
+    input  wire [4:0]             i_load_select,  // Which parameter to load
+    input  wire [DATA_WIDTH-1:0]  i_load_data,
+    
+    // Control
+    input  wire i_start,
+    output wire o_done,
+    
+    // Serial output
+    input  wire [1:0]             i_output_select,  // Which output element (0-2)
+    output wire [DATA_WIDTH-1:0]  o_output_data
+);
+
+    // Load select codes
+    localparam SEL_INPUT_0   = 5'd0,
+               SEL_INPUT_1   = 5'd1,
+               SEL_INPUT_2   = 5'd2,
+               SEL_HIDDEN_0  = 5'd3,
+               SEL_HIDDEN_1  = 5'd4,
+               SEL_HIDDEN_2  = 5'd5,
+               SEL_WR_0      = 5'd6,
+               SEL_WR_1      = 5'd7,
+               SEL_WR_2      = 5'd8,
+               SEL_UR_0      = 5'd9,
+               SEL_UR_1      = 5'd10,
+               SEL_UR_2      = 5'd11,
+               SEL_BR        = 5'd12,
+               SEL_WZ_0      = 5'd13,
+               SEL_WZ_1      = 5'd14,
+               SEL_WZ_2      = 5'd15,
+               SEL_UZ_0      = 5'd16,
+               SEL_UZ_1      = 5'd17,
+               SEL_UZ_2      = 5'd18,
+               SEL_BZ        = 5'd19,
+               SEL_WH_0      = 5'd20,
+               SEL_WH_1      = 5'd21,
+               SEL_WH_2      = 5'd22,
+               SEL_UH_0      = 5'd23,
+               SEL_UH_1      = 5'd24,
+               SEL_UH_2      = 5'd25,
+               SEL_BH        = 5'd26;
+
+    // Internal storage registers
+    reg [DATA_WIDTH-1:0] input_vector [0:INPUT_FEATURES-1];
+    reg [DATA_WIDTH-1:0] prev_hidden_state [0:GRU_UNITS-1];
+    reg [DATA_WIDTH-1:0] Wr [0:INPUT_FEATURES-1];
+    reg [DATA_WIDTH-1:0] Ur [0:GRU_UNITS-1];
+    reg [DATA_WIDTH-1:0] br;
+    reg [DATA_WIDTH-1:0] Wz [0:INPUT_FEATURES-1];
+    reg [DATA_WIDTH-1:0] Uz [0:GRU_UNITS-1];
+    reg [DATA_WIDTH-1:0] bz;
+    reg [DATA_WIDTH-1:0] Wh [0:INPUT_FEATURES-1];
+    reg [DATA_WIDTH-1:0] Uh [0:GRU_UNITS-1];
+    reg [DATA_WIDTH-1:0] bh;
+    
+    // Data loading logic
+    always @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            integer i;
+            for (i = 0; i < INPUT_FEATURES; i = i + 1) begin
+                input_vector[i] <= 0;
+                Wr[i] <= 0;
+                Wz[i] <= 0;
+                Wh[i] <= 0;
+            end
+            for (i = 0; i < GRU_UNITS; i = i + 1) begin
+                prev_hidden_state[i] <= 0;
+                Ur[i] <= 0;
+                Uz[i] <= 0;
+                Uh[i] <= 0;
+            end
+            br <= 0;
+            bz <= 0;
+            bh <= 0;
+        end else if (i_load_enable) begin
+            case (i_load_select)
+                SEL_INPUT_0:  input_vector[0] <= i_load_data;
+                SEL_INPUT_1:  input_vector[1] <= i_load_data;
+                SEL_INPUT_2:  input_vector[2] <= i_load_data;
+                SEL_HIDDEN_0: prev_hidden_state[0] <= i_load_data;
+                SEL_HIDDEN_1: prev_hidden_state[1] <= i_load_data;
+                SEL_HIDDEN_2: prev_hidden_state[2] <= i_load_data;
+                SEL_WR_0:     Wr[0] <= i_load_data;
+                SEL_WR_1:     Wr[1] <= i_load_data;
+                SEL_WR_2:     Wr[2] <= i_load_data;
+                SEL_UR_0:     Ur[0] <= i_load_data;
+                SEL_UR_1:     Ur[1] <= i_load_data;
+                SEL_UR_2:     Ur[2] <= i_load_data;
+                SEL_BR:       br <= i_load_data;
+                SEL_WZ_0:     Wz[0] <= i_load_data;
+                SEL_WZ_1:     Wz[1] <= i_load_data;
+                SEL_WZ_2:     Wz[2] <= i_load_data;
+                SEL_UZ_0:     Uz[0] <= i_load_data;
+                SEL_UZ_1:     Uz[1] <= i_load_data;
+                SEL_UZ_2:     Uz[2] <= i_load_data;
+                SEL_BZ:       bz <= i_load_data;
+                SEL_WH_0:     Wh[0] <= i_load_data;
+                SEL_WH_1:     Wh[1] <= i_load_data;
+                SEL_WH_2:     Wh[2] <= i_load_data;
+                SEL_UH_0:     Uh[0] <= i_load_data;
+                SEL_UH_1:     Uh[1] <= i_load_data;
+                SEL_UH_2:     Uh[2] <= i_load_data;
+                SEL_BH:       bh <= i_load_data;
+            endcase
+        end
+    end
+    
+    // Flatten arrays for GRU_Cell
+    wire [(INPUT_FEATURES*DATA_WIDTH)-1:0] input_vector_flat;
+    wire [(GRU_UNITS*DATA_WIDTH)-1:0]      prev_hidden_state_flat;
+    wire [(INPUT_FEATURES*DATA_WIDTH)-1:0] Wr_flat, Wz_flat, Wh_flat;
+    wire [(GRU_UNITS*DATA_WIDTH)-1:0]      Ur_flat, Uz_flat, Uh_flat;
+    wire [(GRU_UNITS*DATA_WIDTH)-1:0]      new_hidden_state_flat;
+    
+    genvar gi;
+    generate
+        for (gi = 0; gi < INPUT_FEATURES; gi = gi + 1) begin : gen_input_flat
+            assign input_vector_flat[gi*DATA_WIDTH +: DATA_WIDTH] = input_vector[gi];
+            assign Wr_flat[gi*DATA_WIDTH +: DATA_WIDTH] = Wr[gi];
+            assign Wz_flat[gi*DATA_WIDTH +: DATA_WIDTH] = Wz[gi];
+            assign Wh_flat[gi*DATA_WIDTH +: DATA_WIDTH] = Wh[gi];
+        end
+        
+        for (gi = 0; gi < GRU_UNITS; gi = gi + 1) begin : gen_hidden_flat
+            assign prev_hidden_state_flat[gi*DATA_WIDTH +: DATA_WIDTH] = prev_hidden_state[gi];
+            assign Ur_flat[gi*DATA_WIDTH +: DATA_WIDTH] = Ur[gi];
+            assign Uz_flat[gi*DATA_WIDTH +: DATA_WIDTH] = Uz[gi];
+            assign Uh_flat[gi*DATA_WIDTH +: DATA_WIDTH] = Uh[gi];
+        end
+    endgenerate
+    
+    // Instantiate GRU_Cell
+    GRU_Cell #(
+        .DATA_WIDTH(DATA_WIDTH),
+        .GRU_UNITS(GRU_UNITS),
+        .INPUT_FEATURES(INPUT_FEATURES)
+    ) gru_cell_inst (
+        .clk(clk),
+        .rstn(rstn),
+        .i_start_cell(i_start),
+        .o_done_cell(o_done),
+        .i_input_vector_flat(input_vector_flat),
+        .i_prev_hidden_state_flat(prev_hidden_state_flat),
+        .i_Wr_flat(Wr_flat),
+        .i_Ur_flat(Ur_flat),
+        .i_br(br),
+        .i_Wz_flat(Wz_flat),
+        .i_Uz_flat(Uz_flat),
+        .i_bz(bz),
+        .i_Wh_flat(Wh_flat),
+        .i_Uh_flat(Uh_flat),
+        .i_bh(bh),
+        .o_new_hidden_state(new_hidden_state_flat)
+    );
+    
+    // Output selection
+    assign o_output_data = new_hidden_state_flat[i_output_select*DATA_WIDTH +: DATA_WIDTH];
+
+endmodule

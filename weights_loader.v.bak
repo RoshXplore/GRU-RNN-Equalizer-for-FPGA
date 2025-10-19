@@ -1,0 +1,108 @@
+`timescale 1ns / 1ps
+
+// This module holds the model weights in an on-chip ROM.
+// It is initialized during FPGA programming using the weights.mem file.
+//
+// NOTE: This module is designed to load a 256-line padded weight file,
+// but it only assigns the first 239 weights, which correspond to the
+// actual model parameters. The final 17 padding values are loaded
+// into the memory but are ignored.
+
+module weights_loader #(
+    parameter DATA_WIDTH = 32,
+    parameter GRU_UNITS = 7,
+    parameter INPUT_FEATURES = 3
+)(
+    // --- Flattened Weight and Bias Outputs ---
+    output reg [(GRU_UNITS * INPUT_FEATURES * DATA_WIDTH)-1:0] o_Wr_flat,
+    output reg [(GRU_UNITS * GRU_UNITS * DATA_WIDTH)-1:0]      o_Ur_flat,
+    output reg [(GRU_UNITS * DATA_WIDTH)-1:0]                  o_br_flat,
+    output reg [(GRU_UNITS * INPUT_FEATURES * DATA_WIDTH)-1:0] o_Wz_flat,
+    output reg [(GRU_UNITS * GRU_UNITS * DATA_WIDTH)-1:0]      o_Uz_flat,
+    output reg [(GRU_UNITS * DATA_WIDTH)-1:0]                  o_bz_flat,
+    output reg [(GRU_UNITS * INPUT_FEATURES * DATA_WIDTH)-1:0] o_Wh_flat,
+    output reg [(GRU_UNITS * GRU_UNITS * DATA_WIDTH)-1:0]      o_Uh_flat,
+    output reg [(GRU_UNITS * DATA_WIDTH)-1:0]                  o_bh_flat,
+    output reg [(GRU_UNITS * DATA_WIDTH)-1:0]                  o_fc_weights_flat,
+    output reg [DATA_WIDTH-1:0]                               o_fc_bias
+);
+
+    // --- Internal memories to hold the weights ---
+    // Calculate the size of each parameter set
+    localparam WR_SIZE = GRU_UNITS * INPUT_FEATURES; // 7*3=21
+    localparam UR_SIZE = GRU_UNITS * GRU_UNITS;      // 7*7=49
+    localparam BR_SIZE = GRU_UNITS;                  // 7
+    localparam FC_W_SIZE = GRU_UNITS;                // 7
+    localparam FC_B_SIZE = 1;
+
+    // Define memory size to match the padded file (256 lines)
+    // The model has 239 weights, but the file is padded to 256.
+    // We must declare a memory large enough to hold the entire file.
+    localparam PADDED_TOTAL_WEIGHTS = 256;
+    reg [DATA_WIDTH-1:0] all_weights_mem [0:PADDED_TOTAL_WEIGHTS-1];
+
+    integer i, offset;
+
+    // This `initial` block loads the memory at the start of simulation.
+    // For synthesis, the tool will use this same file to initialize the Block RAM.
+    initial begin
+        // Use a relative path like "weights.mem". This is more portable than a
+        // full C:/ path and allows the simulator to find the file easily.
+        $readmemh("weights.mem", all_weights_mem);
+    end
+
+    // --- Combinational logic to assign and flatten the memories ---
+    // This logic correctly unpacks only the first 239 values that are needed
+    // by the model. The 17 padding values at the end of all_weights_mem will
+    // be loaded but are correctly ignored here.
+    always @(*) begin
+        offset = 0;
+
+        // Assign Wr
+        for (i = 0; i < WR_SIZE; i = i+1)
+            o_Wr_flat[i*DATA_WIDTH +: DATA_WIDTH] = all_weights_mem[offset + i];
+        offset = offset + WR_SIZE;
+
+        // Assign Ur
+        for (i = 0; i < UR_SIZE; i = i+1)
+            o_Ur_flat[i*DATA_WIDTH +: DATA_WIDTH] = all_weights_mem[offset + i];
+        offset = offset + UR_SIZE;
+
+        // Assign br
+        for (i = 0; i < BR_SIZE; i = i+1)
+            o_br_flat[i*DATA_WIDTH +: DATA_WIDTH] = all_weights_mem[offset + i];
+        offset = offset + BR_SIZE;
+
+        // Assign Wz, Uz, bz
+        for (i = 0; i < WR_SIZE; i = i+1)
+            o_Wz_flat[i*DATA_WIDTH +: DATA_WIDTH] = all_weights_mem[offset + i];
+        offset = offset + WR_SIZE;
+        for (i = 0; i < UR_SIZE; i = i+1)
+            o_Uz_flat[i*DATA_WIDTH +: DATA_WIDTH] = all_weights_mem[offset + i];
+        offset = offset + UR_SIZE;
+        for (i = 0; i < BR_SIZE; i = i+1)
+            o_bz_flat[i*DATA_WIDTH +: DATA_WIDTH] = all_weights_mem[offset + i];
+        offset = offset + BR_SIZE;
+
+        // Assign Wh, Uh, bh
+        for (i = 0; i < WR_SIZE; i = i+1)
+            o_Wh_flat[i*DATA_WIDTH +: DATA_WIDTH] = all_weights_mem[offset + i];
+        offset = offset + WR_SIZE;
+        for (i = 0; i < UR_SIZE; i = i+1)
+            o_Uh_flat[i*DATA_WIDTH +: DATA_WIDTH] = all_weights_mem[offset + i];
+        offset = offset + UR_SIZE;
+        for (i = 0; i < BR_SIZE; i = i+1)
+            o_bh_flat[i*DATA_WIDTH +: DATA_WIDTH] = all_weights_mem[offset + i];
+        offset = offset + BR_SIZE;
+
+        // Assign FC Weights
+        for (i = 0; i < FC_W_SIZE; i = i+1)
+            o_fc_weights_flat[i*DATA_WIDTH +: DATA_WIDTH] = all_weights_mem[offset + i];
+        offset = offset + FC_W_SIZE;
+
+        // Assign FC Bias
+        o_fc_bias = all_weights_mem[offset];
+    end
+
+endmodule
+

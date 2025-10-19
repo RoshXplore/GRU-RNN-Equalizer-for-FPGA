@@ -1,0 +1,92 @@
+`timescale 1ns / 1ps
+
+module linear_layer #(
+    parameter DATA_WIDTH = 32,
+    parameter INPUT_VECTOR_SIZE = 3 // Changed from 7
+)(
+    input clk,
+    input rstn,
+    input i_start,
+    output reg o_done,
+
+    input [(INPUT_VECTOR_SIZE * DATA_WIDTH)-1:0] i_input_vector_flat,
+    input [(INPUT_VECTOR_SIZE * DATA_WIDTH)-1:0] i_fc_weights_flat,
+    input [DATA_WIDTH-1:0]                       i_fc_bias,
+    output reg [DATA_WIDTH-1:0] o_final_prediction
+);
+
+    // --- State Machine ---
+    reg [1:0] state, next_state;
+    localparam S_IDLE      = 2'd0,
+               S_START_DP  = 2'd1,
+               S_ADD_BIAS  = 2'd2,
+               S_DONE      = 2'd3;
+
+    // --- Internal Signals ---
+    reg dp_start, add_start;
+    wire dp_done, add_done;
+    wire [DATA_WIDTH-1:0] dp_result;
+    
+    // *** FIX: Declare an intermediate wire for the adder's output ***
+    wire [DATA_WIDTH-1:0] final_add_result_wire;
+
+
+    // --- Module Instantiations ---
+    dot_product #(
+        .MAX_VECTOR_SIZE(INPUT_VECTOR_SIZE)
+    ) fc_dot_product (
+        .clk(clk), .rstn(rstn), .start(dp_start), .done(dp_done),
+        .vector_length(INPUT_VECTOR_SIZE[3:0]),
+        .vector_a_flat(i_input_vector_flat),
+        .vector_b_flat(i_fc_weights_flat),
+        .result(dp_result)
+    );
+
+    adder fc_adder (
+        .clk(clk), .rstn(rstn),
+        .start(add_start), .done(add_done),
+        .value_in(dp_result),
+        .bias(i_fc_bias),
+        // *** FIX: Connect adder output to the intermediate wire ***
+        .value_out(final_add_result_wire)
+    );
+
+    // --- Sequential Logic ---
+    always @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            state <= S_IDLE;
+            o_done <= 1'b0;
+            dp_start <= 1'b0;
+            add_start <= 1'b0;
+            o_final_prediction <= 0;
+        end else begin
+            state <= next_state;
+            o_done <= (next_state == S_DONE);
+
+            // Pulse start signals for one cycle
+            dp_start <= (next_state == S_START_DP && state == S_IDLE);
+            add_start <= (next_state == S_ADD_BIAS && state == S_START_DP);
+            
+            // *** FIX: Latch the result from the wire into the output register ***
+            if (state == S_ADD_BIAS && add_done) begin
+                o_final_prediction <= final_add_result_wire;
+            end
+        end
+    end
+
+    // --- Combinational Logic: State Transitions ---
+    always @(*) begin
+        next_state = state;
+        case(state)
+            S_IDLE:
+                if (i_start) next_state = S_START_DP;
+            S_START_DP:
+                if (dp_done) next_state = S_ADD_BIAS;
+            S_ADD_BIAS:
+                if (add_done) next_state = S_DONE;
+            S_DONE:
+                if (!i_start) next_state = S_IDLE;
+        endcase
+    end
+endmodule
+

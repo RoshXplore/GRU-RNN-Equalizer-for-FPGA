@@ -1,0 +1,108 @@
+`timescale 1ns / 1ps
+
+module dot_product_top #(
+    parameter DATA_WIDTH = 32,
+    parameter MAX_VECTOR_SIZE = 7
+)(
+    input clk,
+    input rstn,
+
+    // --- Serial Data Loading Interface (low pin count) ---
+    input [DATA_WIDTH-1:0] data_in,
+    input [2:0]            write_addr,    // Address (0-6) to store the element
+    input                  write_en_a,    // Write enable for vector A's RAM
+    input                  write_en_b,    // Write enable for vector B's RAM
+
+    // --- Calculation Control Interface ---
+    input start_calc,
+    input [3:0] vector_length,
+    output reg calc_done,
+    output [DATA_WIDTH-1:0] result
+);
+
+    // --- Internal Memory (Block RAMs or Register Files) ---
+    reg [DATA_WIDTH-1:0] vector_a_ram [0:MAX_VECTOR_SIZE-1];
+    reg [DATA_WIDTH-1:0] vector_b_ram [0:MAX_VECTOR_SIZE-1];
+
+    // Logic to handle writing incoming serial data into the internal RAMs
+    always @(posedge clk) begin
+        if (write_en_a) begin
+            vector_a_ram[write_addr] <= data_in;
+        end
+        if (write_en_b) begin
+            vector_b_ram[write_addr] <= data_in;
+        end
+    end
+    
+    // --- Signals to connect to the internal dot_product core ---
+    reg [DATA_WIDTH*MAX_VECTOR_SIZE-1:0] core_vec_a_flat;
+    reg [DATA_WIDTH*MAX_VECTOR_SIZE-1:0] core_vec_b_flat;
+    reg core_start;
+    wire core_done;
+    wire [DATA_WIDTH-1:0] core_result;
+    
+    integer i; // for loop variable
+
+    // --- Instantiate your existing parallel dot_product module ---
+    dot_product u_dot_product_core (
+        .clk(clk),
+        .rstn(rstn),
+        .start(core_start),
+        .done(core_done),
+        .vector_a_flat(core_vec_a_flat),
+        .vector_b_flat(core_vec_b_flat),
+        .vector_length(vector_length),
+        .result(core_result)
+    );
+
+    // --- Top-level FSM to manage the overall process ---
+    localparam S_IDLE = 0, S_PACK_VECTORS = 1, S_START_CORE = 2, S_WAIT_CORE = 3;
+    reg [1:0] state;
+
+    always @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            state <= S_IDLE;
+            calc_done <= 1'b0;
+            core_start <= 1'b0;
+        end else begin
+            // Default assignments
+            core_start <= 1'b0;
+            calc_done <= 1'b0;
+
+            case (state)
+                S_IDLE: begin
+                    if (start_calc) begin
+                        state <= S_PACK_VECTORS;
+                    end
+                end
+
+                // This state packs the data from RAM into the flat format for the core
+                S_PACK_VECTORS: begin
+                    for (i = 0; i < MAX_VECTOR_SIZE; i = i + 1) begin
+                        core_vec_a_flat[DATA_WIDTH*i +: DATA_WIDTH] <= vector_a_ram[i];
+                        core_vec_b_flat[DATA_WIDTH*i +: DATA_WIDTH] <= vector_b_ram[i];
+                    end
+                    state <= S_START_CORE;
+                end
+                
+                // Start the internal dot_product core for one cycle
+                S_START_CORE: begin
+                    core_start <= 1'b1;
+                    state <= S_WAIT_CORE;
+                end
+
+                // Wait for the internal core to finish its calculation
+                S_WAIT_CORE: begin
+                    if (core_done) begin
+                        calc_done <= 1'b1; // Signal completion to the outside world
+                        state <= S_IDLE;
+                    end
+                end
+            endcase
+        end
+    end
+    
+    // Assign the final result from the core to the top-level output
+    assign result = core_result;
+
+endmodule

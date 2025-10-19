@@ -1,0 +1,70 @@
+`timescale 1ns / 1ps
+
+module top_fpu_system #(
+    parameter DATA_WIDTH = 32,
+    parameter MAX_VECTOR_SIZE = 7
+)(
+    input clk,
+    input rstn,
+    input start_adder,
+    input start_multiplier,
+    input start_dotproduct,
+
+    // Adder Inputs/Outputs
+    input [DATA_WIDTH-1:0] adder_in,
+    input [DATA_WIDTH-1:0] adder_bias,
+    output [DATA_WIDTH-1:0] adder_out,
+    output adder_done,
+
+    // Multiplier Inputs/Outputs
+    input [DATA_WIDTH-1:0] mult_in_a,
+    input [DATA_WIDTH-1:0] mult_in_b,
+    output [DATA_WIDTH-1:0] mult_out,
+    output mult_done,
+
+    // Dot-Product Inputs/Outputs
+    input [DATA_WIDTH*MAX_VECTOR_SIZE-1:0] vector_a_flat,
+    input [DATA_WIDTH*MAX_VECTOR_SIZE-1:0] vector_b_flat,
+    input [3:0] vector_length,
+    output [DATA_WIDTH-1:0] dotproduct_out,
+    output dotproduct_done
+);
+
+    // --- Adder Instance ---
+    adder u_adder (
+        .clk(clk),
+        .rstn(rstn),
+        .start(start_adder),
+        .done(adder_done),
+        .value_in(adder_in),
+        .bias(adder_bias),
+        .value_out(adder_out)
+    );
+
+    // --- Multiplier Instance ---
+    multiplier u_multiplier (
+        .clk(clk),
+        .rstn(rstn),
+        .start(start_multiplier),
+        .done(mult_done),
+        .w(mult_in_a),
+        .x(mult_in_b),
+        .mult_result(mult_out)
+    );
+
+    // --- Dot-Product Instance ---
+    dot_product #(
+        .DATA_WIDTH(DATA_WIDTH),
+        .MAX_VECTOR_SIZE(MAX_VECTOR_SIZE)
+    ) u_dot_product (
+        .clk(clk),
+        .rstn(rstn),
+        .start(start_dotproduct),
+        .done(dotproduct_done),
+        .vector_a_flat(vector_a_flat),
+        .vector_b_flat(vector_b_flat),
+        .vector_length(vector_length),
+        .result(dotproduct_out)
+    );
+
+endmodule

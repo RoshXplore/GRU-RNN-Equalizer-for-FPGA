@@ -1,0 +1,76 @@
+`timescale 1ns / 1ps
+
+module gate_cal #(
+    parameter DATA_WIDTH = 32,
+    parameter GRU_UNITS = 7,
+    parameter INPUT_FEATURES = 3
+)(
+    input clk,
+    input rstn,
+    input start,
+    output reg done,
+
+    input activation_type, // 0 for sigmoid, 1 for tanh
+    input [(INPUT_FEATURES * DATA_WIDTH)-1:0] i_input_vector_flat,
+    input [(GRU_UNITS * DATA_WIDTH)-1:0]      i_hidden_vector_flat,
+    input [(INPUT_FEATURES * DATA_WIDTH)-1:0] i_W_weights_flat,
+    input [(GRU_UNITS * DATA_WIDTH)-1:0]      i_U_weights_flat,
+    input [DATA_WIDTH-1:0]                    bias,
+    output reg [DATA_WIDTH-1:0] gate_result
+);
+
+    // --- FSM States ---
+    reg [2:0] state, next_state;
+    localparam S_IDLE       = 3'd0,
+               S_DP         = 3'd1, // Dot Product
+               S_ADD_BIAS   = 3'd2, // Add Bias
+               S_ACTIVATE   = 3'd3, // Activation
+               S_DONE       = 3'd4;
+
+    // --- Control & Data Signals ---
+    reg dp_wx_start, dp_uh_start, add_bias_start, act_start;
+    wire dp_wx_done, dp_uh_done, add_bias_done, act_done;
+    wire [DATA_WIDTH-1:0] dp_wx_result, dp_uh_result, add_bias_result, act_result;
+    reg [DATA_WIDTH-1:0] dp_sum_reg;
+
+    // --- Instantiate Workers ---
+    dot_product #(.MAX_VECTOR_SIZE(INPUT_FEATURES)) DPU_WX (.clk(clk), .rstn(rstn), .start(dp_wx_start), .done(dp_wx_done), .vector_length(INPUT_FEATURES[3:0]), .vector_a_flat(i_W_weights_flat), .vector_b_flat(i_input_vector_flat), .result(dp_wx_result));
+    dot_product #(.MAX_VECTOR_SIZE(GRU_UNITS))      DPU_UH (.clk(clk), .rstn(rstn), .start(dp_uh_start), .done(dp_uh_done), .vector_length(GRU_UNITS[3:0]),      .vector_a_flat(i_U_weights_flat), .vector_b_flat(i_hidden_vector_flat), .result(dp_uh_result));
+    adder ADDER_BIAS (.clk(clk), .rstn(rstn), .start(add_bias_start), .done(add_bias_done), .value_in(dp_sum_reg), .bias(bias), .value_out(add_bias_result));
+    SigMoid SIG_inst (.clk(clk), .rstn(rstn), .start(act_start && (activation_type == 0)), .done(act_done), .mult_sum_in(add_bias_result), .neuron_out(act_result));
+    // tanh would be instantiated here similarly if needed
+
+    // --- Sequential Logic ---
+    always @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            state <= S_IDLE;
+            done <= 1'b0;
+            dp_wx_start <= 1'b0; dp_uh_start <= 1'b0; add_bias_start <= 1'b0; act_start <= 1'b0;
+        end else begin
+            state <= next_state;
+            done <= (next_state == S_DONE);
+
+            // Pulse start signals for one cycle
+            dp_wx_start <= (next_state == S_DP && state == S_IDLE);
+            dp_uh_start <= (next_state == S_DP && state == S_IDLE);
+            add_bias_start <= (next_state == S_ADD_BIAS && state == S_DP);
+            act_start <= (next_state == S_ACTIVATE && state == S_ADD_BIAS);
+
+            // Latch intermediate results
+            if (state == S_DP && dp_wx_done && dp_uh_done) dp_sum_reg <= dp_wx_result + dp_uh_result;
+            if (state == S_ACTIVATE && act_done) gate_result <= act_result;
+        end
+    end
+
+    // --- Combinational FSM Logic ---
+    always @(*) begin
+        next_state = state;
+        case(state)
+            S_IDLE:     if (start) next_state = S_DP;
+            S_DP:       if (dp_wx_done && dp_uh_done) next_state = S_ADD_BIAS;
+            S_ADD_BIAS: if (add_bias_done) next_state = S_ACTIVATE;
+            S_ACTIVATE: if (act_done) next_state = S_DONE;
+            S_DONE:     if (!start) next_state = S_IDLE;
+        endcase
+    end
+endmodule

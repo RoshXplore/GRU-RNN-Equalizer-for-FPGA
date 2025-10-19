@@ -1,0 +1,96 @@
+`timescale 1ns / 1ps
+module tb_adder;
+
+    // --- Parameters ---
+    parameter DATA_WIDTH = 32;
+
+    // --- Testbench Signals ---
+    reg clk;
+    reg rstn;
+    reg start;
+    reg [DATA_WIDTH-1:0] value_in;
+    reg [DATA_WIDTH-1:0] bias;
+    wire done;
+    wire [DATA_WIDTH-1:0] value_out;
+
+    // --- Instantiate the Adder (Device Under Test) ---
+    // Make sure your adder module is named 'adder'
+    adder uut (
+        .clk(clk),
+        .rstn(rstn),
+        .start(start),
+        .done(done),
+        .value_in(value_in),
+        .bias(bias),
+        .value_out(value_out)
+    );
+
+    // --- Clock Generation ---
+    initial begin
+        clk = 0;
+        forever #5 clk = ~clk; // 10ns period, 100MHz clock
+    end
+
+    // --- Test Sequence ---
+    initial begin
+        // 1. Initialize and Reset
+        $display("----- Adder Test Started -----");
+        rstn = 1;
+        start = 0;
+        value_in = 0;
+        bias = 0;
+        #10;
+        rstn = 0; // Assert reset
+        #20;
+        rstn = 1; // De-assert reset
+        #10;
+
+        // 2. Test Case 1: The Failing Case (10.0 + (-4.0))
+        $display("\n--- Test 1: Positive + Negative ---");
+        $display("Testing: 10.0 + (-4.0) = 6.0");
+        bias     = 32'h41200000; // 10.0
+        value_in = 32'hC0800000; // -4.0
+        
+        @(posedge clk);
+        start = 1;
+        @(posedge clk);
+        start = 0;
+
+        wait(done); // Wait for the adder to finish
+        #1; // Allow combinational logic to settle
+
+        $display("Result = %h, Expected = %h", value_out, 32'h40C00000);
+        if (value_out == 32'h40C00000) begin
+            $display(">>> PASS <<<");
+        end else begin
+            $display(">>> FAIL <<<");
+        end
+        
+        // 3. Test Case 2: Sanity Check (3.0 + 5.0)
+        $display("\n--- Test 2: Positive + Positive ---");
+        $display("Testing: 3.0 + 5.0 = 8.0");
+        bias     = 32'h40400000; // 3.0
+        value_in = 32'h40A00000; // 5.0
+        
+        @(posedge clk);
+        start = 1;
+        @(posedge clk);
+        start = 0;
+
+        wait(done);
+        #1;
+
+        $display("Result = %h, Expected = %h", value_out, 32'h41000000);
+        if (value_out == 32'h41000000) begin
+            $display(">>> PASS <<<");
+        end else begin
+            $display(">>> FAIL <<<");
+        end
+        
+        // 4. End Simulation
+        $display("\n----- Adder Test Completed -----");
+        #100;
+        $stop;
+    end
+
+endmodule

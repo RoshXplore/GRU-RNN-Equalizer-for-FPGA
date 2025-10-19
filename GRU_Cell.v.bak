@@ -1,0 +1,116 @@
+`timescale 1ns/1ps
+
+module GRU_Cell #(
+    parameter DATA_WIDTH = 32,
+    parameter GRU_UNITS = 3, // Changed from 7
+    parameter INPUT_FEATURES = 3
+)(
+    input  wire clk,
+    input  wire rstn,
+    input  wire i_start_cell,
+    output reg  o_done_cell,
+
+    // Inputs
+    input  wire [(INPUT_FEATURES*DATA_WIDTH)-1:0] i_input_vector_flat,
+    input  wire [(GRU_UNITS*DATA_WIDTH)-1:0]      i_prev_hidden_state_flat,
+    input  wire [(INPUT_FEATURES*DATA_WIDTH)-1:0] i_Wr_flat,
+    input  wire [(GRU_UNITS*DATA_WIDTH)-1:0]      i_Ur_flat,
+    input  wire [DATA_WIDTH-1:0]                  i_br,
+    input  wire [(INPUT_FEATURES*DATA_WIDTH)-1:0] i_Wz_flat,
+    input  wire [(GRU_UNITS*DATA_WIDTH)-1:0]      i_Uz_flat,
+    input  wire [DATA_WIDTH-1:0]                  i_bz,
+    input  wire [(INPUT_FEATURES*DATA_WIDTH)-1:0] i_Wh_flat,
+    input  wire [(GRU_UNITS*DATA_WIDTH)-1:0]      i_Uh_flat,
+    input  wire [DATA_WIDTH-1:0]                  i_bh,
+
+    // Output
+    output reg [DATA_WIDTH-1:0] o_new_hidden_state
+);
+
+    // --- FSM States ---
+    reg [3:0] state, next_state;
+    localparam S_IDLE       = 4'd0, S_CALC_R = 4'd1, S_CALC_Z = 4'd2, S_CALC_H = 4'd3,
+               S_COMBINE_1  = 4'd4, S_COMBINE_2 = 4'd5, S_DONE = 4'd6;
+
+    // --- Control & Data Signals ---
+    reg gate_cal_start;
+    wire gate_cal_done;
+    wire [DATA_WIDTH-1:0] gate_cal_result;
+    reg [DATA_WIDTH-1:0] r_gate_out, z_gate_out, h_cand_out;
+    reg activation_type_reg;
+    reg [(INPUT_FEATURES*DATA_WIDTH)-1:0] w_weights_reg;
+    reg [(GRU_UNITS*DATA_WIDTH)-1:0]      u_weights_reg;
+    reg [DATA_WIDTH-1:0]                  bias_reg;
+
+    // --- Workers for Final Calculation ---
+    reg mult1_start, mult2_start, final_add_start;
+    wire mult1_done, mult2_done, final_add_done;
+    wire [DATA_WIDTH-1:0] mult1_out, mult2_out;
+    localparam [DATA_WIDTH-1:0] P_ONE = 32'h3F800000;
+    
+    // *** FIX: Declare an intermediate wire for the adder's output ***
+    wire [DATA_WIDTH-1:0] final_add_result_wire;
+
+
+    // --- Instantiate Workers ---
+    gate_cal GCU ( .clk(clk), .rstn(rstn), .start(gate_cal_start), .done(gate_cal_done), .activation_type(activation_type_reg), .i_input_vector_flat(i_input_vector_flat), .i_hidden_vector_flat(i_prev_hidden_state_flat), .i_W_weights_flat(w_weights_reg), .i_U_weights_flat(u_weights_reg), .bias(bias_reg), .gate_result(gate_cal_result));
+    multiplier MULT1 (.clk(clk), .rstn(rstn), .start(mult1_start), .done(mult1_done), .w(P_ONE - z_gate_out), .x(i_prev_hidden_state_flat[31:0]), .mult_result(mult1_out));
+    multiplier MULT2 (.clk(clk), .rstn(rstn), .start(mult2_start), .done(mult2_done), .w(z_gate_out), .x(h_cand_out), .mult_result(mult2_out));
+    adder      ADD_FINAL (
+        .clk(clk), .rstn(rstn), .start(final_add_start), .done(final_add_done),
+        .value_in(mult1_out), .bias(mult2_out),
+        // *** FIX: Connect adder output to the intermediate wire ***
+        .value_out(final_add_result_wire)
+    );
+
+
+    // --- Sequential & FSM Logic ---
+    always @(posedge clk or negedge rstn) begin
+        if(!rstn) begin
+            state <= S_IDLE; o_done_cell <= 1'b0; gate_cal_start <= 1'b0;
+            mult1_start <= 1'b0; mult2_start <= 1'b0; final_add_start <= 1'b0;
+            o_new_hidden_state <= 0;
+        end else begin
+            state <= next_state;
+            o_done_cell <= (next_state == S_DONE);
+
+            gate_cal_start <= (next_state == S_CALC_R && state == S_IDLE) ||
+                              (next_state == S_CALC_Z && state == S_CALC_R) ||
+                              (next_state == S_CALC_H && state == S_CALC_Z);
+
+            mult1_start <= (next_state == S_COMBINE_1);
+            mult2_start <= (next_state == S_COMBINE_1);
+            final_add_start <= (next_state == S_COMBINE_2);
+
+            case(next_state) // Configure MUX for gate_cal
+                S_CALC_R: begin w_weights_reg <= i_Wr_flat; u_weights_reg <= i_Ur_flat; bias_reg <= i_br; activation_type_reg <= 0; end
+                S_CALC_Z: begin w_weights_reg <= i_Wz_flat; u_weights_reg <= i_Uz_flat; bias_reg <= i_bz; activation_type_reg <= 0; end
+                S_CALC_H: begin w_weights_reg <= i_Wh_flat; u_weights_reg <= i_Uh_flat; bias_reg <= i_bh; activation_type_reg <= 1; end
+                default: begin end
+            endcase
+
+            if (state == S_CALC_R && gate_cal_done) r_gate_out <= gate_cal_result;
+            if (state == S_CALC_Z && gate_cal_done) z_gate_out <= gate_cal_result;
+            if (state == S_CALC_H && gate_cal_done) h_cand_out <= gate_cal_result;
+            
+            // *** FIX: Latch the result from the wire into the output register ***
+            if (state == S_COMBINE_2 && final_add_done) begin
+                o_new_hidden_state <= final_add_result_wire;
+            end
+        end
+    end
+
+    always @(*) begin
+        next_state = state;
+        case(state)
+            S_IDLE:      if (i_start_cell) next_state = S_CALC_R;
+            S_CALC_R:    if (gate_cal_done) next_state = S_CALC_Z;
+            S_CALC_Z:    if (gate_cal_done) next_state = S_CALC_H;
+            S_CALC_H:    if (gate_cal_done) next_state = S_COMBINE_1;
+            S_COMBINE_1: if (mult1_done && mult2_done) next_state = S_COMBINE_2;
+            S_COMBINE_2: if (final_add_done) next_state = S_DONE;
+            S_DONE:      if (!i_start_cell) next_state = S_IDLE;
+        endcase
+    end
+endmodule
+

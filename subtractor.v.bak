@@ -1,0 +1,84 @@
+module subtractor #(
+    parameter DATA_WIDTH = 32
+)(
+    input wire clk,
+    input wire rstn,
+    input wire start,
+    output reg done,
+    input wire [DATA_WIDTH-1:0] value_a,
+    input wire [DATA_WIDTH-1:0] value_b,
+    output reg [DATA_WIDTH-1:0] value_out
+);
+
+    localparam S_IDLE = 2'd0,
+               S_NEGATE = 2'd1,
+               S_ADD = 2'd2,
+               S_DONE = 2'd3;
+    
+    reg [1:0] state;
+    reg mult_start, add_start;
+    wire mult_done, add_done;
+    wire [DATA_WIDTH-1:0] mult_out, add_out;
+    reg [DATA_WIDTH-1:0] mult_in1, mult_in2, add_in1, add_in2;
+    reg [DATA_WIDTH-1:0] negated_b;
+    
+    // Multiplier to negate b: -1.0 * b
+    multiplier #(.DATA_WIDTH(DATA_WIDTH)) MUL (
+        .clk(clk), .rstn(rstn), .start(mult_start), .done(mult_done),
+        .w(mult_in1), .x(mult_in2), .mult_result(mult_out)
+    );
+    
+    // Adder to compute a + (-b)
+    adder #(.DATA_WIDTH(DATA_WIDTH)) ADD (
+        .clk(clk), .rstn(rstn), .start(add_start), .done(add_done),
+        .value_in(add_in1), .bias(add_in2), .value_out(add_out)
+    );
+    
+    always @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            state <= S_IDLE;
+            done <= 0;
+            mult_start <= 0;
+            add_start <= 0;
+            value_out <= 0;
+            negated_b <= 0;
+        end else begin
+            mult_start <= 0;
+            add_start <= 0;
+            done <= 0;
+            
+            case(state)
+                S_IDLE: begin
+                    if (start) begin
+                        mult_in1 <= 32'hBF800000; // -1.0 in IEEE 754
+                        mult_in2 <= value_b;
+                        mult_start <= 1;
+                        state <= S_NEGATE;
+                    end
+                end
+                
+                S_NEGATE: begin
+                    if (mult_done) begin
+                        negated_b <= mult_out;
+                        add_in1 <= value_a;
+                        add_in2 <= mult_out;
+                        add_start <= 1;
+                        state <= S_ADD;
+                    end
+                end
+                
+                S_ADD: begin
+                    if (add_done) begin
+                        value_out <= add_out;
+                        state <= S_DONE;
+                    end
+                end
+                
+                S_DONE: begin
+                    done <= 1;
+                    state <= S_IDLE;
+                end
+            endcase
+        end
+    end
+endmodule

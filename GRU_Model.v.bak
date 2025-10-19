@@ -1,0 +1,148 @@
+`timescale 1ns / 1ps
+
+module GRU_Model #(
+    parameter DATA_WIDTH = 32,
+    parameter GRU_UNITS = 3,       // Changed from 7
+    parameter INPUT_FEATURES = 3,
+    parameter SEQ_LENGTH = 3        // Changed from 7
+)(
+    input clk,
+    input rstn,
+    input i_start_model,
+    output reg o_model_done,
+
+    // --- All model inputs ---
+    input [(SEQ_LENGTH * INPUT_FEATURES * DATA_WIDTH)-1:0] i_input_sequence_flat,
+    input [(GRU_UNITS * INPUT_FEATURES * DATA_WIDTH)-1:0]  i_Wr_flat,
+    input [(GRU_UNITS * GRU_UNITS * DATA_WIDTH)-1:0]       i_Ur_flat,
+    input [(GRU_UNITS * DATA_WIDTH)-1:0]                   i_br_flat,
+    input [(GRU_UNITS * INPUT_FEATURES * DATA_WIDTH)-1:0]  i_Wz_flat,
+    input [(GRU_UNITS * GRU_UNITS * DATA_WIDTH)-1:0]       i_Uz_flat,
+    input [(GRU_UNITS * DATA_WIDTH)-1:0]                   i_bz_flat,
+    input [(GRU_UNITS * INPUT_FEATURES * DATA_WIDTH)-1:0]  i_Wh_flat,
+    input [(GRU_UNITS * GRU_UNITS * DATA_WIDTH)-1:0]       i_Uh_flat,
+    input [(GRU_UNITS * DATA_WIDTH)-1:0]                   i_bh_flat,
+    input [(GRU_UNITS * DATA_WIDTH)-1:0]                   i_fc_weights_flat,
+    input [DATA_WIDTH-1:0]                                 i_fc_bias,
+
+    output [DATA_WIDTH-1:0] o_final_prediction
+);
+
+    // --- State Machine ---
+    localparam S_IDLE         = 3'd0,
+               S_LOAD_SEQ     = 3'd1, // New state to load the sequence
+               S_START_LAYER  = 3'd2,
+               S_WAIT_LAYER   = 3'd3,
+               S_START_LINEAR = 3'd4,
+               S_WAIT_LINEAR  = 3'd5,
+               S_DONE         = 3'd6;
+    reg [2:0] state, next_state;
+
+    // --- Internal Signals ---
+    reg [$clog2(SEQ_LENGTH):0] timestep_counter;
+    reg [(GRU_UNITS * DATA_WIDTH)-1:0] current_h_flat; // Holds h_{t-1}
+
+    // *** FIX: Register to hold and shift the input sequence ***
+    reg [(SEQ_LENGTH * INPUT_FEATURES * DATA_WIDTH)-1:0] sequence_shifter_reg;
+
+    reg  layer_start;
+    wire layer_done;
+    wire [(GRU_UNITS * DATA_WIDTH)-1:0] next_h_flat;
+
+    reg  linear_start;
+    wire linear_done;
+
+    // *** FIX: Always read the current input vector from the top of the shifter register ***
+    wire [(INPUT_FEATURES * DATA_WIDTH)-1:0] current_input_vector_flat;
+    localparam VECTOR_WIDTH = INPUT_FEATURES * DATA_WIDTH;
+    assign current_input_vector_flat = sequence_shifter_reg[(SEQ_LENGTH * VECTOR_WIDTH)-1 -: VECTOR_WIDTH];
+
+    // --- Module Instantiations ---
+    GRU_Layer gru_layer_inst (
+        .clk(clk), .rstn(rstn), .i_start(layer_start), .o_done(layer_done),
+        .i_input_vector_flat(current_input_vector_flat),
+        .i_prev_hidden_state_flat(current_h_flat),
+        .i_Wr_flat(i_Wr_flat), .i_Ur_flat(i_Ur_flat), .i_br_flat(i_br_flat),
+        .i_Wz_flat(i_Wz_flat), .i_Uz_flat(i_Uz_flat), .i_bz_flat(i_bz_flat),
+        .i_Wh_flat(i_Wh_flat), .i_Uh_flat(i_Uh_flat), .i_bh_flat(i_bh_flat),
+        .o_new_hidden_state_flat(next_h_flat)
+    );
+
+    linear_layer linear_layer_inst (
+        .clk(clk), .rstn(rstn), .i_start(linear_start), .o_done(linear_done),
+        .i_input_vector_flat(current_h_flat), // Uses the final hidden state
+        .i_fc_weights_flat(i_fc_weights_flat),
+        .i_fc_bias(i_fc_bias),
+        .o_final_prediction(o_final_prediction)
+    );
+
+    // --- FSM Sequential Logic ---
+    always @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            state <= S_IDLE;
+            timestep_counter <= 0;
+            current_h_flat <= 0;
+            layer_start <= 1'b0;
+            linear_start <= 1'b0;
+            o_model_done <= 1'b0;
+            sequence_shifter_reg <= 0;
+        end else begin
+            state <= next_state;
+
+            // Pulse start signals for one cycle
+            layer_start <= (next_state == S_START_LAYER);
+            linear_start <= (next_state == S_START_LINEAR);
+            
+            o_model_done <= (next_state == S_DONE);
+
+            // Load the full sequence on the first cycle
+            if (next_state == S_LOAD_SEQ) begin
+                sequence_shifter_reg <= i_input_sequence_flat;
+                timestep_counter <= 0;
+                current_h_flat <= 0;
+            end
+            // After a layer is done, update state and shift the sequence for the next timestep
+            else if (state == S_WAIT_LAYER && layer_done) begin
+                current_h_flat <= next_h_flat;
+                timestep_counter <= timestep_counter + 1;
+                // *** FIX: Shift the sequence left to expose the next vector ***
+                sequence_shifter_reg <= sequence_shifter_reg << VECTOR_WIDTH;
+            end
+        end
+    end
+
+    // --- FSM Combinational Logic ---
+    always @(*) begin
+        next_state = state;
+        case(state)
+            S_IDLE:
+                if (i_start_model) next_state = S_LOAD_SEQ;
+
+            S_LOAD_SEQ:
+                next_state = S_START_LAYER;
+
+            S_START_LAYER:
+                next_state = S_WAIT_LAYER;
+
+            S_WAIT_LAYER:
+                if (layer_done) begin
+                    if (timestep_counter == SEQ_LENGTH - 1)
+                        next_state = S_START_LINEAR;
+                    else
+                        next_state = S_START_LAYER;
+                end
+
+            S_START_LINEAR:
+                next_state = S_WAIT_LINEAR;
+
+            S_WAIT_LINEAR:
+                if (linear_done) next_state = S_DONE;
+
+            S_DONE:
+                if (!i_start_model) next_state = S_IDLE;
+
+            default:
+                next_state = S_IDLE;
+        endcase
+    end
+endmodule

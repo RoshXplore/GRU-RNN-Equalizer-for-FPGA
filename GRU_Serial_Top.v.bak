@@ -1,0 +1,293 @@
+`timescale 1ns / 1ps
+
+// ============================================================================
+// Simple Serial Wrapper for DE10-Lite Board
+// Wraps your existing GRU_Model without modification
+// Loads weights from memory files (same as original)
+// ============================================================================
+module GRU_Serial_Top #(
+    parameter DATA_WIDTH = 32,
+    parameter INPUT_FEATURES = 3,
+    parameter GRU_UNITS = 3,
+    parameter SEQUENCE_LENGTH = 3,
+    parameter OUTPUT_SIZE = 1
+)(
+    // Board Interface
+    input wire clk,              // 50MHz clock (PIN_P11)
+    input wire rstn,             // Reset button (PIN_B8)
+    input wire btn_start,        // Start button (PIN_A7)
+    
+    // Serial Input Interface
+    input wire serial_data_in,   // Serial data input
+    input wire serial_clk_in,    // Serial clock
+    input wire serial_load_en,   // Enable serial load (PIN_C10)
+    
+    // Serial Output Interface  
+    output reg serial_data_out,  // Serial data output
+    output reg serial_clk_out,   // Serial clock out
+    output reg serial_valid,     // Output valid
+    
+    // Status LEDs
+    output reg led_done,         // Inference done (PIN_A8)
+    output reg led_ready,        // Ready for inference (PIN_A9)
+    output reg led_loading,      // Loading data (PIN_A10)
+    output reg [3:0] led_state   // State debug (PIN_D13-D14)
+);
+
+    // ========================================
+    // Internal State Machine
+    // ========================================
+    localparam IDLE         = 4'd0,
+               WAIT_WEIGHTS = 4'd1,
+               LOAD_SERIAL  = 4'd2,
+               READY        = 4'd3,
+               RUN_GRU      = 4'd4,
+               WAIT_GRU     = 4'd5,
+               SEND_SERIAL  = 4'd6,
+               DONE         = 4'd7;
+    
+    reg [3:0] state;
+    
+    // ========================================
+    // Input Sequence Storage
+    // ========================================
+    reg [(SEQUENCE_LENGTH*INPUT_FEATURES*DATA_WIDTH)-1:0] sequence_flat;
+    
+    // Serial input handling
+    reg [DATA_WIDTH-1:0] serial_shift_reg;
+    reg [5:0] bit_count;
+    reg [3:0] word_count;
+    reg [8:0] total_words_loaded; // 9 words for 3x3 sequence
+    
+    // Serial output handling
+    reg [DATA_WIDTH-1:0] output_shift_reg;
+    reg [5:0] output_bit_count;
+    
+    // ========================================
+    // GRU Model Instance (Your Original Module)
+    // ========================================
+    reg gru_start;
+    wire gru_done;
+    wire [DATA_WIDTH-1:0] gru_prediction;
+    
+    GRU_Model #(
+        .DATA_WIDTH(DATA_WIDTH),
+        .INPUT_FEATURES(INPUT_FEATURES),
+        .GRU_UNITS(GRU_UNITS),
+        .SEQUENCE_LENGTH(SEQUENCE_LENGTH),
+        .OUTPUT_SIZE(OUTPUT_SIZE)
+    ) gru_inst (
+        .clk(clk),
+        .rstn(rstn),
+        .i_start(gru_start),
+        .o_done(gru_done),
+        .i_sequence_flat(sequence_flat),
+        .o_prediction(gru_prediction)
+    );
+    
+    // ========================================
+    // Edge Detection for Buttons
+    // ========================================
+    reg btn_start_d1, btn_start_d2;
+    wire btn_start_pressed;
+    
+    reg serial_clk_d1, serial_clk_d2;
+    wire serial_clk_posedge;
+    
+    always @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            btn_start_d1 <= 0;
+            btn_start_d2 <= 0;
+            serial_clk_d1 <= 0;
+            serial_clk_d2 <= 0;
+        end else begin
+            btn_start_d2 <= btn_start_d1;
+            btn_start_d1 <= btn_start;
+            serial_clk_d2 <= serial_clk_d1;
+            serial_clk_d1 <= serial_clk_in;
+        end
+    end
+    
+    assign btn_start_pressed = btn_start_d1 && !btn_start_d2;
+    assign serial_clk_posedge = serial_clk_d1 && !serial_clk_d2;
+    
+    // ========================================
+    // Serial Input Handler
+    // ========================================
+    integer i;
+    
+    always @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            serial_shift_reg <= 0;
+            bit_count <= 0;
+            word_count <= 0;
+            total_words_loaded <= 0;
+            sequence_flat <= 0;
+        end else begin
+            if (state == LOAD_SERIAL && serial_load_en) begin
+                if (serial_clk_posedge) begin
+                    // Shift in data MSB first
+                    serial_shift_reg <= {serial_shift_reg[DATA_WIDTH-2:0], serial_data_in};
+                    bit_count <= bit_count + 1;
+                    
+                    // When we have a complete word
+                    if (bit_count == DATA_WIDTH - 1) begin
+                        // Store in sequence_flat
+                        sequence_flat[word_count*DATA_WIDTH +: DATA_WIDTH] <= 
+                            {serial_shift_reg[DATA_WIDTH-2:0], serial_data_in};
+                        
+                        word_count <= word_count + 1;
+                        bit_count <= 0;
+                        total_words_loaded <= total_words_loaded + 1;
+                        
+                        $display("[%0t] Serial: Loaded word %0d = %h", 
+                                 $time, word_count, {serial_shift_reg[DATA_WIDTH-2:0], serial_data_in});
+                    end
+                end
+            end else if (state == IDLE || state == READY) begin
+                bit_count <= 0;
+                word_count <= 0;
+                if (state == IDLE) begin
+                    total_words_loaded <= 0;
+                end
+            end
+        end
+    end
+    
+    // ========================================
+    // Serial Output Handler
+    // ========================================
+    always @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            output_shift_reg <= 0;
+            output_bit_count <= 0;
+            serial_data_out <= 0;
+            serial_clk_out <= 0;
+            serial_valid <= 0;
+        end else begin
+            if (state == SEND_SERIAL) begin
+                if (output_bit_count == 0) begin
+                    // Load prediction into shift register
+                    output_shift_reg <= gru_prediction;
+                    serial_valid <= 1;
+                    $display("[%0t] Serial: Sending output %h", $time, gru_prediction);
+                end
+                
+                // Toggle serial clock
+                serial_clk_out <= ~serial_clk_out;
+                
+                if (serial_clk_out) begin // On falling edge, shift data
+                    serial_data_out <= output_shift_reg[DATA_WIDTH-1];
+                    output_shift_reg <= {output_shift_reg[DATA_WIDTH-2:0], 1'b0};
+                    output_bit_count <= output_bit_count + 1;
+                end
+                
+                if (output_bit_count >= DATA_WIDTH) begin
+                    serial_valid <= 0;
+                end
+            end else begin
+                output_bit_count <= 0;
+                serial_clk_out <= 0;
+                if (state != DONE) begin
+                    serial_valid <= 0;
+                end
+            end
+        end
+    end
+    
+    // ========================================
+    // Main State Machine
+    // ========================================
+    always @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            state <= IDLE;
+            gru_start <= 0;
+            led_done <= 0;
+            led_ready <= 0;
+            led_loading <= 0;
+            led_state <= 0;
+        end else begin
+            led_state <= state; // Always show current state
+            
+            case (state)
+                IDLE: begin
+                    gru_start <= 0;
+                    led_done <= 0;
+                    led_ready <= 0;
+                    led_loading <= 0;
+                    
+                    // Wait for GRU weights to be loaded from memory
+                    if (gru_inst.weights_loaded) begin
+                        $display("[%0t] SerialTop: Weights loaded, moving to WAIT_WEIGHTS", $time);
+                        state <= WAIT_WEIGHTS;
+                    end
+                end
+                
+                WAIT_WEIGHTS: begin
+                    led_loading <= 1;
+                    // Check if serial load is requested
+                    if (serial_load_en) begin
+                        $display("[%0t] SerialTop: Serial load enabled", $time);
+                        state <= LOAD_SERIAL;
+                    end
+                end
+                
+                LOAD_SERIAL: begin
+                    led_loading <= 1;
+                    // Wait until all 9 words are loaded (3 timesteps × 3 features)
+                    if (!serial_load_en && total_words_loaded >= 9) begin
+                        $display("[%0t] SerialTop: All data loaded (%0d words)", $time, total_words_loaded);
+                        state <= READY;
+                    end
+                end
+                
+                READY: begin
+                    led_ready <= 1;
+                    led_loading <= 0;
+                    
+                    if (btn_start_pressed) begin
+                        $display("[%0t] SerialTop: Start button pressed", $time);
+                        state <= RUN_GRU;
+                    end
+                end
+                
+                RUN_GRU: begin
+                    led_ready <= 0;
+                    gru_start <= 1;
+                    $display("[%0t] SerialTop: Starting GRU inference", $time);
+                    state <= WAIT_GRU;
+                end
+                
+                WAIT_GRU: begin
+                    if (gru_done) begin
+                        $display("[%0t] SerialTop: GRU inference complete", $time);
+                        gru_start <= 0;
+                        state <= SEND_SERIAL;
+                    end
+                end
+                
+                SEND_SERIAL: begin
+                    if (output_bit_count >= DATA_WIDTH) begin
+                        $display("[%0t] SerialTop: Serial output complete", $time);
+                        state <= DONE;
+                    end
+                end
+                
+                DONE: begin
+                    led_done <= 1;
+                    gru_start <= 0;
+                    
+                    // Stay in DONE until start button is released
+                    if (!btn_start) begin
+                        $display("[%0t] SerialTop: Returning to READY", $time);
+                        led_done <= 0;
+                        state <= READY;
+                    end
+                end
+                
+                default: state <= IDLE;
+            endcase
+        end
+    end
+
+endmodule

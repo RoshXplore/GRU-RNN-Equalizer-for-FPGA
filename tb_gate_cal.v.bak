@@ -1,0 +1,236 @@
+`timescale 1ns / 1ps
+
+// This is the NEW, CORRECT testbench for your gru_gate_top module.
+// It will load the on-chip memories before running the test.
+module tb_gate_cal;
+
+    parameter DATA_WIDTH = 32;
+    parameter GRU_UNITS = 7;
+    parameter INPUT_FEATURES = 3;
+    
+    // --- DUT Signals ---
+    reg clk, rstn;
+    reg start_process;
+    wire done_process;
+    
+    // Memory loading interface
+    reg [DATA_WIDTH-1:0] i_data;
+    reg [7:0] i_addr;
+    reg i_we;
+
+    // Configuration and final result
+    reg i_activation_type;
+    wire [DATA_WIDTH-1:0] o_result;
+
+    // --- Test Data Arrays (for easy setup) ---
+    reg [DATA_WIDTH-1:0] input_vector  [0:INPUT_FEATURES-1];
+    reg [DATA_WIDTH-1:0] hidden_vector [0:GRU_UNITS-1];
+    reg [DATA_WIDTH-1:0] W_weights     [0:INPUT_FEATURES-1];
+    reg [DATA_WIDTH-1:0] U_weights     [0:GRU_UNITS-1];
+    reg [DATA_WIDTH-1:0] bias_val;
+
+    integer i;
+
+    // --- Instantiate the Top-Level DUT ---
+    gru_gate_top #(
+        .DATA_WIDTH(DATA_WIDTH),
+        .GRU_UNITS(GRU_UNITS),
+        .INPUT_FEATURES(INPUT_FEATURES)
+    ) uut (
+        .clk(clk),
+        .rstn(rstn),
+        .start_process(start_process),
+        .done_process(done_process),
+        .i_data(i_data),
+        .i_addr(i_addr),
+        .i_we(i_we),
+        .i_activation_type(i_activation_type),
+        .o_result(o_result)
+    );
+
+    // Clock generation
+    initial clk = 0;
+    always #5 clk = ~clk;
+
+    // --- Task to load all data into DUT's internal memories ---
+    task load_data_into_dut;
+        begin
+            @(posedge clk);
+            i_we = 1'b1;
+
+            // 1. Load W weights (Address map: 0x00 - 0x0F)
+            for (i = 0; i < INPUT_FEATURES; i = i + 1) begin
+                i_addr = {2'b00, 4'b0, i[3:0]};
+                i_data = W_weights[i];
+                @(posedge clk);
+            end
+
+            // 2. Load U weights (Address map: 0x40 - 0x4F)
+            for (i = 0; i < GRU_UNITS; i = i + 1) begin
+                i_addr = {2'b01, 4'b0, i[3:0]};
+                i_data = U_weights[i];
+                @(posedge clk);
+            end
+
+            // 3. Load input vector x (Address map: 0x80 - 0x8F)
+            for (i = 0; i < INPUT_FEATURES; i = i + 1) begin
+                i_addr = {2'b10, 4'b0, i[3:0]};
+                i_data = input_vector[i];
+                @(posedge clk);
+            end
+
+            // 4. Load hidden vector h (Address map: 0xC0 - 0xCF)
+            for (i = 0; i < GRU_UNITS; i = i + 1) begin
+                i_addr = {2'b11, 4'b0, i[3:0]};
+                i_data = hidden_vector[i];
+                @(posedge clk);
+            end
+            
+            // 5. Load bias value (Address map: 0xF0)
+            i_addr = 8'hF0;
+            i_data = bias_val;
+            @(posedge clk);
+
+            // Finish writing
+            i_we = 1'b0;
+            i_addr = 0;
+            i_data = 0;
+        end
+    endtask
+
+    // --- Main Test Sequence ---
+    initial begin
+        // Initialize
+        rstn = 0;
+        start_process = 0;
+        i_we = 0;
+        i_addr = 0;
+        i_data = 0;
+        i_activation_type = 0;
+
+        // Reset
+        #20 rstn = 1;
+        #10;
+        
+        $display("\n========================================");
+        $display("Top-Level GRU Gate Test Started");
+        $display("========================================\n");
+        
+        run_all_tests();
+        
+        #500;
+        $display("\n========================================");
+        $display("All Tests Completed");
+        $display("========================================\n");
+        $stop;
+    end
+
+    // Test suite
+    task run_all_tests;
+        begin
+            test_simple_gate();
+            test_with_bias();
+            test_negative_values();
+        end
+    endtask
+
+    // Test 1: Simple gate calculation
+    task test_simple_gate;
+        begin
+            $display("\n--- Test 1: Simple Gate Calculation ---");
+            
+            // Setup data arrays
+            input_vector[0] = 32'h3F800000; input_vector[1] = 32'h40000000; input_vector[2] = 32'h3F000000;
+            hidden_vector[0] = 32'h3DCCCCCD; hidden_vector[1] = 32'h3E4CCCCD;
+            for (i = 2; i < GRU_UNITS; i = i + 1) hidden_vector[i] = 0;
+            W_weights[0] = 32'h3F800000; W_weights[1] = 32'h3F800000; W_weights[2] = 32'h3F800000;
+            U_weights[0] = 32'h3F800000; U_weights[1] = 32'h3F800000;
+            for (i = 2; i < GRU_UNITS; i = i + 1) U_weights[i] = 0;
+            bias_val = 32'h00000000;
+            i_activation_type = 0; // sigmoid
+            
+            // Load data into DUT
+            load_data_into_dut();
+            
+            // Start calculation
+            @(posedge clk);
+            start_process = 1;
+            @(posedge clk);
+            start_process = 0;
+            
+            // Wait for completion
+            wait(done_process);
+            #1; // Let result settle
+            
+            $display("Result: %h", o_result);
+            $display("Expected: sigmoid(3.8) is approx 0x3F7A1CAC");
+            
+            #50;
+        end
+    endtask
+
+    // Test 2: With bias
+    task test_with_bias;
+        begin
+            $display("\n--- Test 2: Gate Calculation with Bias ---");
+            
+            // Setup data arrays
+            input_vector[0] = 32'h3F800000; input_vector[1] = 0; input_vector[2] = 0;
+            hidden_vector[0] = 32'h3F800000;
+            for (i = 1; i < GRU_UNITS; i = i + 1) hidden_vector[i] = 0;
+            W_weights[0] = 32'h40000000; W_weights[1] = 0; W_weights[2] = 0;
+            U_weights[0] = 32'h40400000;
+            for (i = 1; i < GRU_UNITS; i = i + 1) U_weights[i] = 0;
+            bias_val = 32'h3F800000; // 1.0
+            i_activation_type = 0; // sigmoid
+
+            load_data_into_dut();
+            
+            @(posedge clk);
+            start_process = 1;
+            @(posedge clk);
+            start_process = 0;
+            
+            wait(done_process);
+            #1;
+            
+            $display("Result: %h", o_result);
+            $display("Expected: sigmoid(6.0) is approx 0x3F7F8A23");
+            
+            #50;
+        end
+    endtask
+
+    // Test 3: Negative values
+    task test_negative_values;
+       begin
+            $display("\n--- Test 3: Gate Calculation with Negative Values ---");
+            
+            // Setup data arrays
+            input_vector[0] = 32'h3F800000; input_vector[1] = 32'hBF800000; input_vector[2] = 0;
+            hidden_vector[0] = 32'h3F800000;
+            for (i = 1; i < GRU_UNITS; i = i + 1) hidden_vector[i] = 0;
+            W_weights[0] = 32'h3F800000; W_weights[1] = 32'h3F800000; W_weights[2] = 0;
+            U_weights[0] = 32'h3F800000;
+            for (i = 1; i < GRU_UNITS; i = i + 1) U_weights[i] = 0;
+            bias_val = 32'h00000000;
+            i_activation_type = 0; // sigmoid
+
+            load_data_into_dut();
+            
+            @(posedge clk);
+            start_process = 1;
+            @(posedge clk);
+            start_process = 0;
+            
+            wait(done_process);
+            #1;
+            
+            $display("Result: %h", o_result);
+            $display("Expected: sigmoid(1.0) is approx 0x3F3B67CF");
+            
+            #50;
+        end
+    endtask
+    
+endmodule

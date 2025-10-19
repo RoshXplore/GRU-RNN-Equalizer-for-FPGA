@@ -1,0 +1,252 @@
+`timescale 1ns/1ps
+
+module tb_GRU_Cell;
+
+    // Parameters
+    parameter DATA_WIDTH = 32;
+    parameter GRU_UNITS = 3;
+    parameter INPUT_FEATURES = 3;
+    parameter CLK_PERIOD = 10;
+
+    // Testbench signals
+    reg clk;
+    reg rstn;
+    reg i_start_cell;
+    wire o_done_cell;
+
+    // Input vectors (flattened)
+    reg [(INPUT_FEATURES*DATA_WIDTH)-1:0] i_input_vector_flat;
+    reg [(GRU_UNITS*DATA_WIDTH)-1:0]      i_prev_hidden_state_flat;
+    
+    // Reset gate weights
+    reg [(INPUT_FEATURES*DATA_WIDTH)-1:0] i_Wr_flat;
+    reg [(GRU_UNITS*DATA_WIDTH)-1:0]      i_Ur_flat;
+    reg [DATA_WIDTH-1:0]                  i_br;
+    
+    // Update gate weights
+    reg [(INPUT_FEATURES*DATA_WIDTH)-1:0] i_Wz_flat;
+    reg [(GRU_UNITS*DATA_WIDTH)-1:0]      i_Uz_flat;
+    reg [DATA_WIDTH-1:0]                  i_bz;
+    
+    // Hidden candidate weights
+    reg [(INPUT_FEATURES*DATA_WIDTH)-1:0] i_Wh_flat;
+    reg [(GRU_UNITS*DATA_WIDTH)-1:0]      i_Uh_flat;
+    reg [DATA_WIDTH-1:0]                  i_bh;
+
+    // Output
+    wire [DATA_WIDTH-1:0] o_new_hidden_state;
+
+    // Clock generation
+    initial begin
+        clk = 0;
+        forever #(CLK_PERIOD/2) clk = ~clk;
+    end
+
+    // DUT instantiation
+    GRU_Cell #(
+        .DATA_WIDTH(DATA_WIDTH),
+        .GRU_UNITS(GRU_UNITS),
+        .INPUT_FEATURES(INPUT_FEATURES)
+    ) dut (
+        .clk(clk),
+        .rstn(rstn),
+        .i_start_cell(i_start_cell),
+        .o_done_cell(o_done_cell),
+        .i_input_vector_flat(i_input_vector_flat),
+        .i_prev_hidden_state_flat(i_prev_hidden_state_flat),
+        .i_Wr_flat(i_Wr_flat),
+        .i_Ur_flat(i_Ur_flat),
+        .i_br(i_br),
+        .i_Wz_flat(i_Wz_flat),
+        .i_Uz_flat(i_Uz_flat),
+        .i_bz(i_bz),
+        .i_Wh_flat(i_Wh_flat),
+        .i_Uh_flat(i_Uh_flat),
+        .i_bh(i_bh),
+        .o_new_hidden_state(o_new_hidden_state)
+    );
+
+    // Helper function to convert real to IEEE 754 single precision
+    function [31:0] real2fp;
+        input real value;
+        real2fp = $realtobits(value);
+    endfunction
+
+    // Test stimulus
+    initial begin
+        $dumpfile("tb_GRU_Cell.vcd");
+        $dumpvars(0, tb_GRU_Cell);
+
+        // Initialize
+        rstn = 0;
+        i_start_cell = 0;
+        
+        // Initialize all inputs to zero
+        i_input_vector_flat = 0;
+        i_prev_hidden_state_flat = 0;
+        i_Wr_flat = 0;
+        i_Ur_flat = 0;
+        i_br = 0;
+        i_Wz_flat = 0;
+        i_Uz_flat = 0;
+        i_bz = 0;
+        i_Wh_flat = 0;
+        i_Uh_flat = 0;
+        i_bh = 0;
+
+        // Reset
+        #(CLK_PERIOD*5);
+        rstn = 1;
+        #(CLK_PERIOD*2);
+
+        $display("\n========================================");
+        $display("Starting GRU Cell Test");
+        $display("========================================\n");
+
+        // Test Case 1: Simple values
+        $display("Test Case 1: Basic GRU Cell Operation");
+        $display("--------------------------------------");
+        
+        // Input vector [0.5, 0.3, 0.2]
+        i_input_vector_flat[31:0]   = real2fp(0.5);
+        i_input_vector_flat[63:32]  = real2fp(0.3);
+        i_input_vector_flat[95:64]  = real2fp(0.2);
+        
+        // Previous hidden state [0.1, 0.1, 0.1]
+        i_prev_hidden_state_flat[31:0]  = real2fp(0.1);
+        i_prev_hidden_state_flat[63:32] = real2fp(0.1);
+        i_prev_hidden_state_flat[95:64] = real2fp(0.1);
+        
+        // Reset gate weights (Wr)
+        i_Wr_flat[31:0]  = real2fp(0.4);
+        i_Wr_flat[63:32] = real2fp(0.3);
+        i_Wr_flat[95:64] = real2fp(0.2);
+        
+        // Reset gate weights (Ur)
+        i_Ur_flat[31:0]  = real2fp(0.5);
+        i_Ur_flat[63:32] = real2fp(0.4);
+        i_Ur_flat[95:64] = real2fp(0.3);
+        
+        // Reset gate bias
+        i_br = real2fp(0.1);
+        
+        // Update gate weights (Wz)
+        i_Wz_flat[31:0]  = real2fp(0.3);
+        i_Wz_flat[63:32] = real2fp(0.4);
+        i_Wz_flat[95:64] = real2fp(0.3);
+        
+        // Update gate weights (Uz)
+        i_Uz_flat[31:0]  = real2fp(0.6);
+        i_Uz_flat[63:32] = real2fp(0.5);
+        i_Uz_flat[95:64] = real2fp(0.4);
+        
+        // Update gate bias
+        i_bz = real2fp(0.05);
+        
+        // Hidden candidate weights (Wh)
+        i_Wh_flat[31:0]  = real2fp(0.5);
+        i_Wh_flat[63:32] = real2fp(0.4);
+        i_Wh_flat[95:64] = real2fp(0.3);
+        
+        // Hidden candidate weights (Uh)
+        i_Uh_flat[31:0]  = real2fp(0.7);
+        i_Uh_flat[63:32] = real2fp(0.6);
+        i_Uh_flat[95:64] = real2fp(0.5);
+        
+        // Hidden candidate bias
+        i_bh = real2fp(0.0);
+
+        // Start the computation
+        #(CLK_PERIOD);
+        i_start_cell = 1;
+        #(CLK_PERIOD);
+        i_start_cell = 0;
+
+        // Wait for completion
+        wait(o_done_cell);
+        #(CLK_PERIOD*2);
+        
+        $display("\nResults:");
+        $display("  New Hidden State = %h (%.6f)", 
+                 o_new_hidden_state, 
+                 $bitstoreal(o_new_hidden_state));
+        
+        #(CLK_PERIOD*5);
+
+        // Test Case 2: Different values
+        $display("\n\nTest Case 2: Different Input Values");
+        $display("--------------------------------------");
+        
+        // Input vector [1.0, 0.5, 0.0]
+        i_input_vector_flat[31:0]   = real2fp(1.0);
+        i_input_vector_flat[63:32]  = real2fp(0.5);
+        i_input_vector_flat[95:64]  = real2fp(0.0);
+        
+        // Previous hidden state [0.5, 0.3, 0.2]
+        i_prev_hidden_state_flat[31:0]  = real2fp(0.5);
+        i_prev_hidden_state_flat[63:32] = real2fp(0.3);
+        i_prev_hidden_state_flat[95:64] = real2fp(0.2);
+
+        // Start the computation
+        #(CLK_PERIOD);
+        i_start_cell = 1;
+        #(CLK_PERIOD);
+        i_start_cell = 0;
+
+        // Wait for completion
+        wait(o_done_cell);
+        #(CLK_PERIOD*2);
+        
+        $display("\nResults:");
+        $display("  New Hidden State = %h (%.6f)", 
+                 o_new_hidden_state, 
+                 $bitstoreal(o_new_hidden_state));
+
+        #(CLK_PERIOD*10);
+
+        $display("\n========================================");
+        $display("All Tests Completed");
+        $display("========================================\n");
+        
+        $finish;
+    end
+
+    // Timeout watchdog
+    initial begin
+        #(CLK_PERIOD*10000);
+        $display("\nERROR: Simulation timeout!");
+        $finish;
+    end
+
+    // Monitor state transitions
+    always @(posedge clk) begin
+        if (dut.state != dut.next_state) begin
+            case(dut.next_state)
+                4'd0: $display("[%0t] State: IDLE", $time);
+                4'd1: $display("[%0t] State: CALC_R", $time);
+                4'd2: $display("[%0t] State: CALC_Z", $time);
+                4'd3: $display("[%0t] State: CALC_H", $time);
+                4'd4: $display("[%0t] State: COMBINE_1", $time);
+                4'd5: $display("[%0t] State: COMBINE_2", $time);
+                4'd6: $display("[%0t] State: DONE", $time);
+            endcase
+        end
+    end
+
+    // Monitor gate outputs
+    always @(posedge clk) begin
+        if (dut.state == 4'd1 && dut.gate_cal_done) begin
+            $display("[%0t] Reset Gate (r) = %h (%.6f)", 
+                     $time, dut.r_gate_out, $bitstoreal(dut.r_gate_out));
+        end
+        if (dut.state == 4'd2 && dut.gate_cal_done) begin
+            $display("[%0t] Update Gate (z) = %h (%.6f)", 
+                     $time, dut.z_gate_out, $bitstoreal(dut.z_gate_out));
+        end
+        if (dut.state == 4'd3 && dut.gate_cal_done) begin
+            $display("[%0t] Hidden Candidate (h) = %h (%.6f)", 
+                     $time, dut.h_cand_out, $bitstoreal(dut.h_cand_out));
+        end
+    end
+
+endmodule

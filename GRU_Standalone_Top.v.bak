@@ -1,0 +1,254 @@
+`timescale 1ns / 1ps
+
+// Standalone GRU Module - All data embedded in FPGA
+// Just press button to run tests, see results on LEDs/UART
+
+module GRU_Standalone_Top #(
+    parameter DATA_WIDTH = 32,
+    parameter INPUT_FEATURES = 3,
+    parameter GRU_UNITS = 3,
+    parameter SEQUENCE_LENGTH = 3,
+    parameter NUM_TEST_CASES = 8
+)(
+    input wire clk,              // 50 MHz clock
+    input wire rstn,             // KEY0 - Reset (active low)
+    input wire btn_run_test,     // KEY1 - Run next test
+    
+    // UART output (optional - for detailed results)
+    output reg uart_tx,
+    
+    // LED outputs
+    output reg [7:0] led_test_num,    // Shows current test case (0-7)
+    output reg led_pass,              // Green - Test passed
+    output reg led_fail,              // Red - Test failed
+    output reg led_busy,              // Yellow - Processing
+    output reg led_done,              // Blue - All tests complete
+    output reg [3:0] led_state        // Debug: current state
+);
+
+    // ===== State Machine =====
+    localparam IDLE           = 4'd0,
+               LOAD_TEST      = 4'd1,
+               RUN_GRU        = 4'd2,
+               WAIT_GRU       = 4'd3,
+               CHECK_RESULT   = 4'd4,
+               DISPLAY_RESULT = 4'd5,
+               NEXT_TEST      = 4'd6,
+               ALL_DONE       = 4'd7;
+    
+    reg [3:0] state;
+    reg [7:0] current_test;
+    reg [7:0] tests_passed;
+    
+    // ===== Test Data Storage (Embedded in FPGA) =====
+    reg [DATA_WIDTH-1:0] test_inputs_mem [0:(NUM_TEST_CASES*SEQUENCE_LENGTH*INPUT_FEATURES)-1];
+    reg [DATA_WIDTH-1:0] expected_outputs_mem [0:NUM_TEST_CASES-1];
+    
+    // Load test data from files (synthesized into BRAM)
+    initial begin
+        $readmemh("test_input.mem", test_inputs_mem);
+        $readmemh("test_output.mem", expected_outputs_mem);
+        $display("Test data loaded into FPGA memory");
+    end
+    
+    // ===== Current Test Sequence =====
+    reg [(SEQUENCE_LENGTH*INPUT_FEATURES*DATA_WIDTH)-1:0] current_sequence;
+    reg [DATA_WIDTH-1:0] expected_output;
+    wire [DATA_WIDTH-1:0] gru_prediction;
+    
+    // ===== GRU Model Instance =====
+    reg gru_start;
+    wire gru_done;
+    
+    GRU_Model #(
+        .DATA_WIDTH(DATA_WIDTH),
+        .INPUT_FEATURES(INPUT_FEATURES),
+        .GRU_UNITS(GRU_UNITS),
+        .SEQUENCE_LENGTH(SEQUENCE_LENGTH)
+    ) gru_inst (
+        .clk(clk),
+        .rstn(rstn),
+        .i_start(gru_start),
+        .o_done(gru_done),
+        .i_sequence_flat(current_sequence),
+        .o_prediction(gru_prediction)
+    );
+    
+    // ===== Button Edge Detection =====
+    reg btn_run_d1, btn_run_d2;
+    wire btn_run_pressed;
+    
+    always @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            btn_run_d1 <= 0;
+            btn_run_d2 <= 0;
+        end else begin
+            btn_run_d2 <= btn_run_d1;
+            btn_run_d1 <= btn_run_test;
+        end
+    end
+    
+    assign btn_run_pressed = btn_run_d1 && !btn_run_d2;
+    
+    // ===== Result Comparison =====
+    reg [DATA_WIDTH-1:0] error_abs;
+    reg test_passed;
+    
+    // Function to compare floats (absolute error)
+    function [DATA_WIDTH-1:0] float_abs_diff;
+        input [DATA_WIDTH-1:0] a, b;
+        real val_a, val_b, diff;
+        begin
+            val_a = $bitstoreal(a);
+            val_b = $bitstoreal(b);
+            diff = val_a - val_b;
+            if (diff < 0) diff = -diff;
+            float_abs_diff = $realtobits(diff);
+        end
+    endfunction
+    
+    // ===== Main State Machine =====
+    integer i, base_idx;
+    
+    always @(posedge clk or negedge rstn) begin
+        if (!rstn) begin
+            state <= IDLE;
+            current_test <= 0;
+            tests_passed <= 0;
+            gru_start <= 0;
+            led_test_num <= 0;
+            led_pass <= 0;
+            led_fail <= 0;
+            led_busy <= 0;
+            led_done <= 0;
+            led_state <= 0;
+            current_sequence <= 0;
+            expected_output <= 0;
+            test_passed <= 0;
+        end else begin
+            led_state <= state;
+            
+            case (state)
+                IDLE: begin
+                    led_busy <= 0;
+                    led_pass <= 0;
+                    led_fail <= 0;
+                    
+                    if (current_test >= NUM_TEST_CASES) begin
+                        state <= ALL_DONE;
+                    end else if (btn_run_pressed) begin
+                        state <= LOAD_TEST;
+                        led_busy <= 1;
+                    end
+                end
+                
+                LOAD_TEST: begin
+                    // Load test sequence from memory
+                    base_idx = current_test * SEQUENCE_LENGTH * INPUT_FEATURES;
+                    
+                    for (i = 0; i < SEQUENCE_LENGTH * INPUT_FEATURES; i = i + 1) begin
+                        current_sequence[i*DATA_WIDTH +: DATA_WIDTH] <= test_inputs_mem[base_idx + i];
+                    end
+                    
+                    expected_output <= expected_outputs_mem[current_test];
+                    led_test_num <= current_test;
+                    
+                    $display("[%0t] Loading test case %0d", $time, current_test);
+                    state <= RUN_GRU;
+                end
+                
+                RUN_GRU: begin
+                    gru_start <= 1;
+                    state <= WAIT_GRU;
+                    $display("[%0t] Starting GRU inference for test %0d", $time, current_test);
+                end
+                
+                WAIT_GRU: begin
+                    gru_start <= 1;
+                    if (gru_done) begin
+                        gru_start <= 0;
+                        state <= CHECK_RESULT;
+                        $display("[%0t] GRU completed for test %0d", $time, current_test);
+                    end
+                end
+                
+                CHECK_RESULT: begin
+                    gru_start <= 0;
+                    
+                    // Calculate error
+                    error_abs <= float_abs_diff(gru_prediction, expected_output);
+                    
+                    // Check if passed (error < 0.01)
+                    if ($bitstoreal(float_abs_diff(gru_prediction, expected_output)) < 0.01) begin
+                        test_passed <= 1;
+                        tests_passed <= tests_passed + 1;
+                        $display("[%0t] Test %0d PASSED: pred=%f, exp=%f, err=%f", 
+                                 $time, current_test, 
+                                 $bitstoreal(gru_prediction),
+                                 $bitstoreal(expected_output),
+                                 $bitstoreal(error_abs));
+                    end else begin
+                        test_passed <= 0;
+                        $display("[%0t] Test %0d FAILED: pred=%f, exp=%f, err=%f", 
+                                 $time, current_test,
+                                 $bitstoreal(gru_prediction),
+                                 $bitstoreal(expected_output),
+                                 $bitstoreal(error_abs));
+                    end
+                    
+                    state <= DISPLAY_RESULT;
+                end
+                
+                DISPLAY_RESULT: begin
+                    // Show result on LEDs for 2 seconds
+                    led_busy <= 0;
+                    led_pass <= test_passed;
+                    led_fail <= !test_passed;
+                    
+                    // Hold for visibility (100M cycles = 2 sec @ 50MHz)
+                    state <= NEXT_TEST;
+                end
+                
+                NEXT_TEST: begin
+                    // Wait for button release or timeout
+                    if (!btn_run_test) begin
+                        current_test <= current_test + 1;
+                        state <= IDLE;
+                    end
+                end
+                
+                ALL_DONE: begin
+                    led_done <= 1;
+                    led_busy <= 0;
+                    led_test_num <= tests_passed; // Show number passed
+                    
+                    $display("\n========================================");
+                    $display("ALL TESTS COMPLETE");
+                    $display("Passed: %0d / %0d", tests_passed, NUM_TEST_CASES);
+                    $display("========================================\n");
+                    
+                    // Reset on button press
+                    if (btn_run_pressed) begin
+                        current_test <= 0;
+                        tests_passed <= 0;
+                        led_done <= 0;
+                        state <= IDLE;
+                    end
+                end
+                
+                default: state <= IDLE;
+            endcase
+        end
+    end
+    
+    // ===== UART Transmitter (Optional - for PC monitoring) =====
+    // Simple 115200 baud UART
+    reg [7:0] uart_data;
+    reg uart_send;
+    wire uart_busy;
+    
+    // TODO: Add UART module instance if you want detailed output to PC
+    // For now, just tie uart_tx high (idle)
+    initial uart_tx = 1;
+
+endmodule
