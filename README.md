@@ -93,12 +93,12 @@ Below are hardware results for all **9 test cases (0–8)**:
 | **0** | ![case0](./docs/fpga_validation/case0.jpg) | ✅ PASS | <1% |
 | **1** | ![case1](./docs/fpga_validation/case1.jpg) | ✅ PASS | <0.3% |
 | **2** | ![case2](./docs/fpga_validation/case2.jpg) | ✅ PASS | <1% |
-| **3** | ![case3](./docs/fpga_validation/case3.jpg) | ✅ PASS | <0.3% |
-| **4** | ![case4](./docs/fpga_validation/case4.jpg) | ✅ PASS | <1% |
+| **3** | ![case3](./docs/fpga_validation/case3.jpg) | ✅ PASS | <1% |
+| **4** | ![case4](./docs/fpga_validation/case4.jpg) | ✅ PASS | <0.3% |
 | **5** | ![case5](./docs/fpga_validation/case5.jpg) | ✅ PASS | <0.3% |
 | **6** | ![case6](./docs/fpga_validation/case6.jpg) | ✅ PASS | <1% |
 | **7** | ![case7](./docs/fpga_validation/case7.jpg) | ✅ PASS | <0.3% |
-| **8** | ![case8](./docs/fpga_validation/case8.jpg) | ✅ PASS | <1% |
+
 
 *(All test cases passed successfully with ≤0.6% absolute prediction error.)*
 
