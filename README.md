@@ -8,7 +8,7 @@
 > * **Current Public Code:** BPSK Inference-only Model (Fixed Point).
 > * **Private Code:** Serialized IEEE-754 Floating Point Architecture, QPSK Support, and On-Chip BPTT Training Module.
 >
-> *Full RTL and architecture details for Phase 2 can be shared with interviewers upon request.*
+> *Full RTL and architecture details for Phase 2 can be shared upon request.*
 
 ---
 
