@@ -1,4 +1,7 @@
-# GRU-Based Neural Network Equalizer on FPGA
+# GRU(RNN)-Based Neural Network Optical Channel Equaliser on FPGA
+
+> Note:
+> This repository includes the project architecture, verification flow, FPGA deployment results, and supporting implementation files. Some internal RTL modules related to ongoing development and research work are intentionally omitted from the current public release.
 
 Implementation of a GRU (Gated Recurrent Unit) based neural network equalizer in Verilog for digital communication systems, including both inference and on-chip training using Backpropagation Through Time (BPTT).
 
