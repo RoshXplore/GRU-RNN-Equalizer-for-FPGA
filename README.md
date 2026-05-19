@@ -1,132 +1,662 @@
-# GRU Neural Network Based Equalizer on FPGA
+# GRU-Based Neural Network Equalizer on FPGA
 
-> **⚠️ Project Status: Research Embargo**
->
-> This repository currently contains the **Phase 1 (BPSK Inference)** implementation of the GRU Equalizer.
->
-> The **Phase 2 (QPSK + On-Chip SGD Training)** implementation, as described in my resume/portfolio, is currently **private** pending the publication of a research paper.
-> * **Current Public Code:** BPSK Inference-only Model (Fixed Point).
-> * **Private Code:** Serialized IEEE-754 Floating Point Architecture, QPSK Support, and On-Chip BPTT Training Module.
->
-> *Full RTL and architecture details for Phase 2 can be shared upon request.*
+Implementation of a GRU (Gated Recurrent Unit) based neural network equalizer in Verilog for digital communication systems, including both inference and on-chip training using Backpropagation Through Time (BPTT).
 
----
+This project explores how recurrent neural networks can be implemented directly in hardware for adaptive channel equalization, where the communication channel characteristics vary over time and traditional DSP equalizers become less effective.
 
-## 🚀 Project Evolution
+The work includes:
 
-This project was developed in two distinct phases to explore hardware-accelerated neural networks for optical communication.
-
-### **Phase 1: BPSK Inference (Open Source)**
-* **Goal:** Proof-of-concept for running RNNs on FPGA.
-* **Architecture:** Parallelized Fixed-Point Arithmetic.
-* **Status:** ✅ **Code available in this repo.**
-
-### **Phase 2: QPSK & On-Chip Training (Research Version)**
-* **Goal:** Adaptive channel equalization with real-time learning.
-* **Architecture:** Serialized **IEEE-754 Single Precision (Float32)**.
-* **Key Feature:** Implements **Backpropagation Through Time (BPTT)** entirely in hardware using Stochastic Gradient Descent (SGD).
-* **Status:** 🔒 **Code Private (See Results Below).**
+* Python/PyTorch model development
+* Verilog RTL implementation
+* FPGA deployment on Intel DE10-Lite
+* On-chip GRU training using BPTT
+* Gradient descent based weight updates
+* RTL and FPGA verification
 
 ---
 
-## 📊 Phase 2: QPSK Results (Research Preview)
+# Project Motivation
 
-Although the source code for Phase 2 is private, the hardware validation results on the **Intel DE10-Lite** are presented below.
+Communication channels introduce:
 
-### 1. QPSK Constellation & Accuracy
-The system achieved **99.86% accuracy (MSE ~0.001)** on QPSK symbol detection after on-chip training.
+* noise,
+* distortion,
+* and inter-symbol interference (ISI).
 
-![QPSK Constellation Diagram](./docs/phase2_results/qpsk_constellation.png)
-*(Fig 10 from Project Report: QPSK Constellation Diagram for Python Exported weights on DE10-Lite)*
+Traditional equalizers work well for linear systems, but their complexity increases significantly for non-linear and time-varying channels.
 
-### 2. On-Chip Training Convergence
-The hardware-based SGD algorithm successfully minimized the Mean Squared Error (MSE) from **0.96 to 0.0187** over 200 epochs.
+Recurrent Neural Networks (RNNs), especially GRUs, are better suited for this problem because they maintain a hidden state that acts as memory across time steps. This allows the network to learn temporal dependencies caused by ISI.
 
-![Training Loss Convergence](./docs/phase2_results/training_loss.png)
-*(Fig 11 from Project Report: MSE vs Epoch plot for 10 samples on DE-10 Lite)*
+The objective of this project was to design a trainable GRU architecture completely in Verilog that could:
 
----
-
-## 🛠️ Phase 1: BPSK Implementation Details (Current Code)
-
-The code currently available in this repository implements the **Phase 1 BPSK Model**.
-
-| Parameter | Description |
-|------------|--------------|
-| **Modulation** | BPSK |
-| **Model Inputs** | 3 input features, sequence length 3 |
-| **GRU Architecture** | 3 neurons, single layer |
-| **Hardware Platform** | Intel DE10-Lite FPGA |
-| **Logic Utilization** | 24,670 Logic Blocks |
-| **Inference Latency** | 86 µs per sequence |
-| **Test Accuracy** | < 1% error across 8 test cases |
-
-### Implementation Workflow
-
-1. **Model Training (Python + PyTorch)**
-   - Designed a lightweight GRU model for channel equalization.
-   - Trained on noisy BPSK sequences generated in Python.
-   - Exported trained weights for fixed-point FPGA implementation.
-
-2. **Hardware Deployment**
-   - Weights converted and integrated into HDL.
-   - Implemented custom GRU cell using Verilog.
-   - Deployed on **Intel DE10-Lite FPGA** using **Intel Quartus Prime**.
-   - Measured real-time inference using onboard testbench.
+* perform sequence-based equalization,
+* execute inference directly on FPGA,
+* and update weights on-chip using BPTT and SGD.
 
 ---
 
-## ✅ Phase 1: Simulation & Hardware Validation
+# Why GRU Instead of Standard RNN?
 
-The FPGA implementation of the BPSK equalizer was verified using a **gate-level Verilog testbench**. All 8 test cases passed successfully with less than **0.6% prediction error**.
+Standard RNNs suffer from:
 
-### 🔬 Testbench Log Summary
+* vanishing gradients,
+* exploding gradients,
+* unstable long-sequence training.
 
-| Test Case | Predicted | Expected | Abs. Error | Result |
-|------------|------------|-----------|-------------|----------|
-| 0 | 0.998079 | 1.000071 | 0.001992 | ✅ PASS |
-| 1 | 0.998477 | 0.999508 | 0.001031 | ✅ PASS |
-| 2 | 0.998028 | 1.000284 | 0.002256 | ✅ PASS |
-| 3 | -1.004128 | -0.998272 | 0.005856 | ✅ PASS |
-| 4 | 1.002403 | 1.000745 | 0.001659 | ✅ PASS |
-| 5 | 0.998400 | 0.999283 | 0.000883 | ✅ PASS |
-| 6 | -1.004687 | -0.998748 | 0.005939 | ✅ PASS |
-| 7 | 1.002257 | 1.000832 | 0.001425 | ✅ PASS |
+GRUs solve this using gating mechanisms:
 
-**Simulation Summary:** ✅ **Passed 8/8 test cases** ⚡ **Average absolute error:** 0.0029 (~0.29%)  
-🧮 **Maximum deviation:** 0.0059 (~0.6%)  
-🕒 **Total simulation time:** ~995 µs equivalent (gate-level)
+* Reset Gate
+* Update Gate
 
----
+These gates regulate:
 
-## 📷 Phase 1: FPGA Output Gallery
+* how much past information should be forgotten,
+* and how much should be retained.
 
-Below are hardware results for all **9 test cases (0–8)** from the BPSK implementation:
-
-| Test Case | FPGA Output | Status | Error Tier |
-|------------|-------------|---------|-------------|
-| **0** | ![case0](./docs/fpga_validation/case0.jpg) | ✅ PASS | <1% |
-| **1** | ![case1](./docs/fpga_validation/case1.jpg) | ✅ PASS | <0.3% |
-| **2** | ![case2](./docs/fpga_validation/case2.jpg) | ✅ PASS | <1% |
-| **3** | ![case3](./docs/fpga_validation/case3.jpg) | ✅ PASS | <1% |
-| **4** | ![case4](./docs/fpga_validation/case4.jpg) | ✅ PASS | <0.3% |
-| **5** | ![case5](./docs/fpga_validation/case5.jpg) | ✅ PASS | <0.3% |
-| **6** | ![case6](./docs/fpga_validation/case6.jpg) | ✅ PASS | <1% |
-| **7** | ![case7](./docs/fpga_validation/case7.jpg) | ✅ PASS | <0.3% |
+This improves training stability and allows the model to learn temporal channel behavior more effectively.
 
 ---
 
-## 🧩 Tools and Technologies
+# Project Evolution
 
-- **PyTorch** – GRU model design and training  
-- **NumPy, Matplotlib** – Data generation and visualization  
-- **Intel Quartus Prime** – FPGA synthesis and deployment  
-- **Verilog** – Custom GRU cell and equalizer logic implementation  
-- **Python → HDL workflow** – Quantized weight integration
+The project evolved through two major stages.
 
 ---
 
-### 📬 Contact & Access
+# Phase 1 — BPSK GRU Equalizer
 
-For inquiries regarding the **Phase 2 (Research Version)** code or architecture details, please contact:
-**Roshan Sharma** - [roshan.sharma.22042@iitgoa.ac.in](mailto:roshan.sharma.22042@iitgoa.ac.in)
+The first version focused on:
+
+* understanding GRU inference in hardware,
+* FPGA deployment,
+* and validating basic equalization capability.
+
+## Features
+
+* BPSK modulation support
+* GRU inference engine in Verilog
+* Fixed-point arithmetic
+* FPGA deployment on Intel DE10-Lite
+* Python-trained weights exported into hardware
+
+## Results
+
+* Successfully deployed on FPGA
+* Less than 1% prediction error
+* Correct symbol prediction across all test cases
+
+---
+
+# Phase 2 — QPSK + On-Chip Training
+
+The second version significantly expanded the architecture.
+
+Major improvements included:
+
+* QPSK support
+* IEEE-754 floating-point arithmetic
+* Serialized hardware architecture
+* Backpropagation Through Time (BPTT)
+* On-chip gradient calculation
+* On-chip SGD weight updates
+* Gradient clipping
+* Hardware training controller
+* Gate-state caching for temporal backpropagation
+
+This stage focused on implementing a fully trainable recurrent neural network directly in Verilog.
+
+---
+
+# GRU Architecture Overview
+
+The complete hardware architecture consists of:
+
+```text
+Input Sequence
+      ↓
+GRU Layer
+      ↓
+Linear Output Layer
+      ↓
+Prediction
+      ↓
+Loss Calculation
+      ↓
+BPTT Gradient Engine
+      ↓
+Weight Update (SGD)
+      ↓
+Updated Parameters
+```
+
+---
+
+# Block Diagram
+
+The following diagram shows the overall hardware architecture used for inference and on-chip training.
+
+The design contains:
+
+* GRU inference modules,
+* BPTT training modules,
+* gradient accumulation,
+* and SGD-based weight update engines.
+
+![System Architecture](docs/block_diagram.png)
+
+**Figure:** *Top-level architecture of the GRU-based equalizer and training pipeline.*
+
+---
+
+# Training Flowchart
+
+The flowchart below summarizes the complete hardware training process.
+
+The controller:
+
+1. initializes weights,
+2. performs forward inference,
+3. stores intermediate gate states,
+4. computes gradients using BPTT,
+5. updates weights using SGD,
+6. repeats until convergence.
+
+![Training Flow](docs/training_flowchart.png)
+
+**Figure:** *Flowchart of the complete hardware training algorithm.*
+
+---
+
+# GRU Equations Implemented in Hardware
+
+The following GRU equations were implemented directly in Verilog.
+
+---
+
+## Reset Gate
+
+```text
+rt = σ(Wrxt + Urht−1 + br)
+```
+
+Controls how much previous memory should be discarded.
+
+---
+
+## Update Gate
+
+```text
+zt = σ(Wzxt + Uzht−1 + bz)
+```
+
+Controls how much past information should be retained.
+
+---
+
+## Candidate State
+
+```text
+nt = tanh(Whxt + rt(Uhht−1) + bh)
+```
+
+Computes the new candidate memory.
+
+---
+
+## Final Hidden State
+
+```text
+ht = (1 − zt)nt + ztht−1
+```
+
+Combines previous memory with newly computed information.
+
+---
+
+# Hardware Design Philosophy
+
+One of the main engineering challenges was FPGA resource limitation.
+
+A fully parallel floating-point GRU implementation would consume large amounts of:
+
+* DSP blocks,
+* logic elements,
+* and memory resources.
+
+To solve this, the design uses a serialized architecture.
+
+Instead of instantiating many FPUs in parallel:
+
+* arithmetic units are reused sequentially,
+* FSMs schedule operations,
+* and intermediate gate states are cached for BPTT.
+
+This significantly reduced hardware usage while still supporting complete training functionality.
+
+---
+
+# Major Verilog Modules
+
+---
+
+# Arithmetic Units
+
+## Floating Point Multiplier / Adder / Subtractor
+
+IEEE-754 single precision arithmetic modules used throughout the design.
+
+Used for:
+
+* matrix multiplication,
+* gate computation,
+* loss calculation,
+* gradient computation,
+* and SGD updates.
+
+---
+
+# Dot Product Unit (`dot_product`)
+
+Computes vector dot products using a serialized multiply-accumulate architecture.
+
+Instead of parallel MAC units:
+
+* one multiplier and one adder are reused iteratively,
+* controlled using FSM scheduling.
+
+This reduced FPGA resource utilization significantly.
+
+---
+
+# Activation Function Modules
+
+## `SigMoid`
+
+Implements sigmoid activation using LUT approximation.
+
+## `tanh`
+
+Implements tanh activation using LUT approximation.
+
+Instead of directly calculating exponentials in hardware:
+
+* precomputed activation values are stored in ROM,
+* floating-point inputs are mapped to LUT addresses.
+
+This greatly reduces hardware complexity.
+
+---
+
+# Gradient Clipper
+
+Implements gradient clipping to prevent exploding gradients during training.
+
+The module:
+
+* limits gradient magnitude,
+* stabilizes training,
+* and prevents numerical overflow.
+
+---
+
+# GRU Inference Modules
+
+---
+
+# Gate Calculation Unit (`gate_cal`)
+
+Computes:
+
+* reset gate,
+* update gate,
+* candidate hidden state.
+
+Uses:
+
+* dot product engines,
+* activation modules,
+* and floating-point arithmetic units.
+
+---
+
+# GRU Cell (`GRU_Cell_BPTT`)
+
+Implements one GRU timestep.
+
+The FSM sequence:
+
+1. Reset gate computation
+2. Update gate computation
+3. Candidate state computation
+4. Final hidden state update
+
+Internal gate outputs are also stored for later use during BPTT.
+
+---
+
+# GRU Layer (`GRU_Layer_BPTT`)
+
+Processes the complete sequence.
+
+Responsibilities include:
+
+* iterating through timesteps,
+* maintaining hidden states,
+* caching intermediate values,
+* and coordinating serialized GRU-cell execution.
+
+---
+
+# Linear Layer (`linear_layer`)
+
+Maps the final hidden state to:
+
+* predicted I component,
+* predicted Q component.
+
+Used as the final output stage for QPSK prediction.
+
+---
+
+# Training Architecture
+
+A major contribution of this project was implementing on-chip training directly in hardware.
+
+Unlike inference-only accelerators, this design computes gradients and updates weights internally.
+
+---
+
+# BPTT Controller (`Training_Controller`)
+
+Controls the complete training process.
+
+## Forward Pass
+
+* processes input sequences,
+* stores intermediate states,
+* computes prediction outputs.
+
+## Backward Pass
+
+* traverses timesteps in reverse order,
+* computes gradients,
+* accumulates updates,
+* triggers SGD weight updates.
+
+---
+
+# GRU Backward Engine (`GRU_Backward`)
+
+Implements:
+
+* chain rule calculations,
+* temporal gradient propagation,
+* weight gradient calculation.
+
+Uses stored:
+
+* hidden states,
+* reset gates,
+* update gates,
+* candidate states.
+
+---
+
+# Weight Update Engine
+
+Implements SGD updates using:
+
+```text
+Wnew = Wold − η∇W
+```
+
+where:
+
+* η = learning rate
+* ∇W = computed gradient
+
+---
+
+# FPGA Platform
+
+## Hardware
+
+* Intel DE10-Lite FPGA
+
+## Tools Used
+
+* Verilog HDL
+* Intel Quartus Prime
+* ModelSim
+* Vivado
+* Python
+* PyTorch
+* NumPy
+* Matplotlib
+
+---
+
+# Network Configuration
+
+| Parameter       | Value              |
+| --------------- | ------------------ |
+| Modulation      | QPSK               |
+| Input Features  | 2 (I/Q)            |
+| Hidden Units    | 3                  |
+| Output Features | 2                  |
+| Sequence Length | 3                  |
+| Precision       | IEEE-754 Float32   |
+| Loss Function   | Mean Squared Error |
+
+---
+
+# Python Golden Model
+
+Before hardware implementation, the GRU architecture was first developed and validated in Python using PyTorch.
+
+The Python model was used to:
+
+* verify GRU convergence behavior,
+* validate BPTT equations,
+* export trained weights,
+* and compare RTL outputs against software references.
+
+---
+
+# Python Training Results
+
+---
+
+## QPSK Constellation Diagram
+
+The trained Python model correctly learned the QPSK constellation mapping and accurately predicted transmitted symbols.
+
+The clustering of predicted points around the ideal constellation locations confirms successful equalization and low prediction error.
+
+![QPSK Constellation](docs/python_constellation.png)
+
+**Figure:** *QPSK constellation diagram generated from the trained Python model.*
+
+---
+
+## MSE vs Epoch
+
+The Mean Squared Error converged rapidly during training.
+
+Most convergence occurred within the first 25 epochs, indicating that the GRU architecture successfully learned the channel characteristics.
+
+![Python MSE](docs/python_mse.png)
+
+**Figure:** *Training and validation MSE convergence of the Python GRU model.*
+
+---
+
+## Weight Stability Analysis
+
+The L2 norm of the weights was monitored during training to observe convergence behavior.
+
+The curve stabilizes after training progresses, indicating stable parameter convergence.
+
+![Weight Stability](docs/weights_l2_norm.png)
+
+**Figure:** *L2 norm of GRU weights across training epochs.*
+
+---
+
+# RTL Simulation Results
+
+After validating the architecture in Python, the complete GRU inference and training pipeline was implemented in Verilog and tested using RTL simulation.
+
+The RTL implementation reproduced the expected convergence behavior observed in software.
+
+---
+
+## RTL Training Convergence
+
+The RTL simulation demonstrated successful convergence of the hardware training loop.
+
+The Mean Squared Error reduced from:
+
+* 0.8931
+  to
+* 0.0089
+
+over 50 training epochs.
+
+This verified:
+
+* correctness of the BPTT equations,
+* gradient propagation logic,
+* and hardware SGD updates.
+
+![RTL Loss](docs/rtl_training_loss.png)
+
+**Figure:** *Training loss convergence during RTL simulation.*
+
+---
+
+# FPGA Hardware Validation
+
+The design was tested on Intel DE10-Lite FPGA hardware.
+
+Both inference and training behavior were validated using:
+
+* Python-exported weights,
+* on-chip training logic,
+* and hardware-generated outputs.
+
+---
+
+## FPGA Constellation Output
+
+The FPGA implementation correctly reproduced the QPSK constellation points with high accuracy.
+
+Measured performance:
+
+* MSE ≈ 0.001373
+* Accuracy ≈ 99.86%
+
+![FPGA Constellation](docs/fpga_constellation.png)
+
+**Figure:** *Constellation diagram generated from FPGA inference outputs using Python-exported weights.*
+
+---
+
+## FPGA On-Chip Training Results
+
+The FPGA implementation successfully demonstrated on-chip learning using SGD-based weight updates.
+
+The hardware training loop reduced the loss from:
+
+* 0.96
+  to
+* 0.0187
+
+over 200 epochs.
+
+Although oscillations are present, the overall trend confirms successful convergence of the hardware training architecture.
+
+![FPGA Training Loss](docs/fpga_training_loss.png)
+
+**Figure:** *Hardware training loss convergence on Intel DE10-Lite FPGA.*
+
+---
+
+# Verification Methodology
+
+The project was verified at multiple stages.
+
+## Python Validation
+
+* Verified GRU convergence behavior
+* Verified constellation prediction accuracy
+* Verified exported weight correctness
+
+## RTL Simulation
+
+* Compared RTL outputs against software references
+* Verified gradient convergence during training
+* Verified BPTT arithmetic correctness
+
+## FPGA Validation
+
+* Verified inference outputs on FPGA
+* Verified training convergence on hardware
+* Verified QPSK constellation reconstruction
+
+---
+
+# Exported Weights
+
+Weights trained in Python were exported and loaded into the Verilog architecture for inference validation.
+
+The exported parameters included:
+
+* Reset gate weights
+* Update gate weights
+* Candidate state weights
+* Hidden-state matrices
+* Output layer weights
+* Bias vectors
+
+This enabled direct comparison between:
+
+* Python outputs,
+* RTL simulation outputs,
+* and FPGA outputs.
+
+---
+
+# Future Improvements
+
+Possible future improvements include:
+
+* Adam/RMSProp optimizer implementation
+* BF16 or mixed-precision arithmetic
+* Larger hidden-state architectures
+* Multi-layer GRUs
+* LSTM implementation
+* AXI-stream interfaces
+* Longer sequence support
+* Improved activation approximations
+* Better memory optimization
+
+---
+
+# References
+
+1. Kyunghyun Cho et al. — *Learning Phrase Representations using RNN Encoder–Decoder for Statistical Machine Translation*
+
+2. FPGA-based online learning accelerator papers
+
+3. Neural-network equalization research papers
+
+4. IEEE papers on hardware RNN acceleration
+
+---
+
+# Author
+
+Roshan Sharma
+B.Tech, Electrical Engineering
+IIT Goa
