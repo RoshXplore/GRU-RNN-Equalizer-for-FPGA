@@ -1,0 +1,16 @@
+Analysis & Synthesis Status : Successful - Mon Dec 08 01:23:12 2025
+Quartus Prime Version : 20.1.1 Build 720 11/11/2020 SJ Lite Edition
+Revision Name : GRU_QPSK
+Top-level Entity Name : fpga_top_module
+Family : MAX 10
+Total logic elements : 54,848
+    Total combinational functions : 42,243
+    Dedicated logic registers : 24,266
+Total registers : 24266
+Total pins : 71
+Total virtual pins : 0
+Total memory bits : 1,353,728
+Embedded Multiplier 9-bit elements : 91
+Total PLLs : 1
+UFM blocks : 0
+ADC blocks : 0

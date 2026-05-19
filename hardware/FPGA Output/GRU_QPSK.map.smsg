@@ -1,0 +1,2 @@
+Warning (10268): Verilog HDL information at GRU_top.v(187): always construct contains both blocking and non-blocking assignments File: C:/Users/Roshan/Dropbox/PC/Downloads/GRU_QPSK/GRU_top.v Line: 187
+Warning (10268): Verilog HDL information at fpga_top_module.v(115): always construct contains both blocking and non-blocking assignments File: C:/Users/Roshan/Dropbox/PC/Downloads/GRU_QPSK/fpga_top_module.v Line: 115
