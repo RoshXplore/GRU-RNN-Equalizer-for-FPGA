@@ -142,7 +142,7 @@ The design contains:
 * gradient accumulation,
 * and SGD-based weight update engines.
 
-![System Architecture](docs/block_diagram.png)
+![System Architecture](docs/figures/block_diagram.png)
 
 **Figure:** *Top-level architecture of the GRU-based equalizer and training pipeline.*
 
@@ -161,7 +161,7 @@ The controller:
 5. updates weights using SGD,
 6. repeats until convergence.
 
-![Training Flow](docs/training_flowchart.png)
+![Training Flow](docs/figures/training_flowchart.png)
 
 **Figure:** *Flowchart of the complete hardware training algorithm.*
 
@@ -473,7 +473,7 @@ The trained Python model correctly learned the QPSK constellation mapping and ac
 
 The clustering of predicted points around the ideal constellation locations confirms successful equalization and low prediction error.
 
-![QPSK Constellation](docs/python_constellation.png)
+![QPSK Constellation](docs/figures/python_constellation.png)
 
 **Figure:** *QPSK constellation diagram generated from the trained Python model.*
 
@@ -485,7 +485,7 @@ The Mean Squared Error converged rapidly during training.
 
 Most convergence occurred within the first 25 epochs, indicating that the GRU architecture successfully learned the channel characteristics.
 
-![Python MSE](docs/python_mse.png)
+![Python MSE](docs/figures/python_mse.png)
 
 **Figure:** *Training and validation MSE convergence of the Python GRU model.*
 
@@ -497,7 +497,7 @@ The L2 norm of the weights was monitored during training to observe convergence 
 
 The curve stabilizes after training progresses, indicating stable parameter convergence.
 
-![Weight Stability](docs/weights_l2_norm.png)
+![Weight Stability](docs/figures/weights_l2_norm.png)
 
 **Figure:** *L2 norm of GRU weights across training epochs.*
 
@@ -529,7 +529,7 @@ This verified:
 * gradient propagation logic,
 * and hardware SGD updates.
 
-![RTL Loss](docs/rtl_training_loss.png)
+![RTL Loss](docs/figures/rtl_training_loss.png)
 
 **Figure:** *Training loss convergence during RTL simulation.*
 
@@ -556,7 +556,7 @@ Measured performance:
 * MSE ≈ 0.001373
 * Accuracy ≈ 99.86%
 
-![FPGA Constellation](docs/fpga_constellation.png)
+![FPGA Constellation](docs/figures/fpga_constellation.png)
 
 **Figure:** *Constellation diagram generated from FPGA inference outputs using Python-exported weights.*
 
@@ -576,7 +576,7 @@ over 200 epochs.
 
 Although oscillations are present, the overall trend confirms successful convergence of the hardware training architecture.
 
-![FPGA Training Loss](docs/fpga_training_loss.png)
+![FPGA Training Loss](docs/figures/fpga_training_loss.png)
 
 **Figure:** *Hardware training loss convergence on Intel DE10-Lite FPGA.*
 
