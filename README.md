@@ -645,13 +645,17 @@ Possible future improvements include:
 
 # References
 
-1. Kyunghyun Cho et al. — *Learning Phrase Representations using RNN Encoder–Decoder for Statistical Machine Translation*
+[1] A. Bhawsar and A. Srivastava, “Multilayer perceptron equalizer using neural network accelerators,” IIT Goa, Goa, India, B.Tech. Project Report, 2025.
 
-2. FPGA-based online learning accelerator papers
+[2] P. J. Freire et al., “Implementing neural network-based equalizers in coherent optical transmission systems using field-programmable gate arrays,” *Journal of Lightwave Technology*, vol. 41, no. 12, pp. 3797–3812, Jun. 2023. doi:10.1109/JLT.2023.3272011
 
-3. Neural-network equalization research papers
+[3] F. Ortega-Zamorano, J. M. Jerez, D. U. Muñoz, R. M. Luque-Baena, and L. Franco, “Efficient implementation of the backpropagation algorithm in FPGAs and microcontrollers,” *IEEE Transactions on Neural Networks and Learning Systems*, vol. 27, no. 9, pp. 1840–1853, Sep. 2016. doi:10.1109/TNNLS.2015.2460991
 
-4. IEEE papers on hardware RNN acceleration
+[4] Y. Umuroglu et al., “FINN: A framework for fast and flexible quantized neural network inference,” *IEEE Transactions on Computers*, vol. 70, no. 4, pp. 631–644, Apr. 2021.
+
+[5] K. Cho et al., “Learning Phrase Representations using RNN Encoder–Decoder for Statistical Machine Translation,” in *Proceedings of the Conference on Empirical Methods in Natural Language Processing (EMNLP)*, Doha, Qatar, Oct. 2014, pp. 1724–1734. doi:10.3115/v1/D14-1179
+
+[6] S. Mandal et al., “FPGA-based online learning using approximate hardware accelerators,” in *Proceedings of the International Conference on Field-Programmable Logic and Applications (FPL)*, 2021.
 
 ---
 
